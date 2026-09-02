@@ -1,0 +1,109 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+# The GPUI desktop app is a separate workspace: building it requires a full
+# Xcode install (Metal shader compilation), and `cargo test --workspace` must
+# keep working without one. See app/Cargo.toml.
+exclude = ["app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/rwax/agent-gateway"
+homepage = "https://github.com/rwax/agent-gateway"
+authors = ["Agent Gateway Contributors"]
+
+[workspace.dependencies]
+# --- internal ---
+gateway-core = { path = "crates/gateway-core", version = "0.1.0" }
+gateway-config = { path = "crates/gateway-config", version = "0.1.0" }
+gateway-store = { path = "crates/gateway-store", version = "0.1.0" }
+gateway-auth = { path = "crates/gateway-auth", version = "0.1.0" }
+gateway-acp = { path = "crates/gateway-acp", version = "0.1.0" }
+gateway-remote = { path = "crates/gateway-remote", version = "0.1.0" }
+gateway-tunnel = { path = "crates/gateway-tunnel", version = "0.1.0" }
+gateway-relay = { path = "crates/gateway-relay", version = "0.1.0" }
+
+# --- ACP ---
+# Pinned exactly: the SDK's Rust API changes between majors, while the *wire*
+# protocol it speaks is negotiated at runtime. The gateway negotiates protocol
+# v1, which is what Zed, Codex, Claude Code and OpenCode speak today, so the
+# SDK version here need not match the one an IDE was built against.
+agent-client-protocol = { version = "=2.0.0", features = ["unstable"] }
+
+# --- async runtime / plumbing ---
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# --- http / ws ---
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "limit"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset", "http2"] }
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
+http = "1"
+
+# --- data ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+
+# --- primitives ---
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+dashmap = "6"
+thiserror = "2"
+anyhow = "1"
+bytes = "1"
+url = { version = "2", features = ["serde"] }
+humantime-serde = "1"
+
+# --- crypto ---
+ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
+rand = "0.8"
+base64 = "0.22"
+sha2 = "0.10"
+subtle = "2"
+
+# --- observability ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+
+# --- cli / misc ---
+clap = { version = "4", features = ["derive", "env"] }
+rust-embed = { version = "8", features = ["mime-guess", "interpolate-folder-path"] }
+directories = "6"
+shellexpand = "3"
+qrcode = { version = "0.14", default-features = false }
+hostname = "0.4"
+tempfile = "3"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+todo = "warn"
+dbg_macro = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# Proc macros and build scripts are compiled with the release profile too, and
+# stripping them makes Xcode 26's linker emit a dylib that rustc then refuses to
+# dlopen ("mis-aligned LINKEDIT string pool"). They are compile-time only, so
+# there is nothing to gain from stripping them anyway.
+[profile.release.build-override]
+strip = false

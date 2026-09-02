@@ -1,0 +1,10 @@
+/target
+**/target
+docs
+**/node_modules
+/web/dist
+**/*.rs.bk
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

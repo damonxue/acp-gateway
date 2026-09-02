@@ -1,0 +1,13 @@
+# Convenience aliases, so packaging and the desktop app are "just cargo".
+#
+# The desktop app lives in its own workspace (it needs Xcode), which is why it
+# is addressed through --manifest-path rather than -p.
+[alias]
+# Build the macOS desktop app.
+app = "build --release --manifest-path app/Cargo.toml"
+# Run the desktop app against a local gateway.
+app-run = "run --manifest-path app/Cargo.toml"
+# Build "Agent Gateway.app" and the .dmg installer (web client + CLI + GUI).
+dmg = "run -q -p xtask -- dmg"
+# Package without the GPUI app — useful on a machine without the Metal toolchain.
+dmg-cli = "run -q -p xtask -- dmg --no-app"

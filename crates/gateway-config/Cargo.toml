@@ -1,0 +1,28 @@
+[package]
+name = "gateway-config"
+description = "Configuration loading and validation for Agent Gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gateway-core.workspace = true
+
+chrono.workspace = true
+directories.workspace = true
+humantime-serde.workspace = true
+serde = { workspace = true }
+shellexpand.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

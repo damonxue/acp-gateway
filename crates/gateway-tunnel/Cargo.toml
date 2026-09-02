@@ -1,0 +1,24 @@
+[package]
+name = "gateway-tunnel"
+description = "cloudflared supervisor for Agent Gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gateway-core.workspace = true
+
+chrono.workspace = true
+serde = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "rt", "sync", "time", "macros"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

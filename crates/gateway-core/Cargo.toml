@@ -1,0 +1,32 @@
+[package]
+name = "gateway-core"
+description = "Domain model, ports and session orchestration for Agent Gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# In-memory ports plus a ready-made `SessionManager`, so adapter crates can
+# test against the real orchestration logic instead of a mock of it.
+testing = []
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+dashmap.workspace = true
+futures.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }

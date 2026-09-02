@@ -1,0 +1,57 @@
+# Agent Gateway configuration
+# Agent Gateway 配置文件
+#
+# Location / 默认位置: ~/.agent-gateway/config.toml
+
+[gateway]
+# Loopback only. Remote access goes through a tunnel plus a WSS ticket.
+# 仅监听回环地址；远程访问必须经过 tunnel 和 WSS ticket。
+bind = "127.0.0.1:48100"
+data_dir = "~/.agent-gateway"
+log_level = "info"
+# machine_name = "MacBook Pro"
+
+[security]
+# WSS tickets are single-use and expire quickly.
+# WSS ticket 一次性使用，且很快过期。
+ticket_ttl = "60s"
+pairing_ttl = "5m"
+# Requests arriving from 127.0.0.1 without tunnel headers may skip the ticket
+# check, so `curl` and local UIs keep working.
+# 来自 127.0.0.1 且不带 tunnel 头的请求可以跳过 ticket 校验，方便本地调试。
+trust_loopback = true
+
+# [relay]
+# endpoint = "https://relay.example.com"
+# token = "<relay token>"
+# heartbeat_interval = "30s"
+
+# [tunnel]
+# mode = "token"                      # or "config"
+# token = "<cloudflare tunnel token>" # never logged / 永不写入日志
+# hostname = "gw.example.com"
+# origin = "http://127.0.0.1:48100"
+# binary = "cloudflared"
+
+# Agents are always explicit: the gateway never scans your machine.
+# Agent 必须显式配置：Gateway 不会自动扫描本机可执行文件。
+# Check each agent's own docs for the flag that enables ACP mode.
+# 每个 Agent 的 ACP 启动参数以其官方文档为准。
+
+[[agents]]
+id = "codex"
+name = "Codex"
+command = "npx"
+args = ["-y", "@agentclientprotocol/codex-acp@latest"]
+
+[[agents]]
+id = "claude"
+name = "Claude Code"
+command = "npx"
+args = ["-y", "@agentclientprotocol/claude-agent-acp@latest"]
+
+# [[agents]]
+# id = "opencode"
+# name = "OpenCode"
+# command = "opencode"
+# args = ["acp"]

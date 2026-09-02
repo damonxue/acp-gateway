@@ -1,0 +1,358 @@
+/* Mobile-first, dark, no framework. Safe-area aware so the composer is not
+   hidden behind the iPhone home indicator. */
+
+:root {
+  --bg: #0d0f13;
+  --panel: #161a20;
+  --panel-2: #1e232b;
+  --text: #e6e9ef;
+  --muted: #8b95a5;
+  --accent: #5b9dff;
+  --danger: #ff5f56;
+  --ok: #3fb950;
+  --warn: #d29922;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono,
+pre,
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 12px;
+}
+.center {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.row.gap {
+  justify-content: flex-start;
+}
+.wrap {
+  flex-wrap: wrap;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  padding: 11px 16px;
+  background: var(--accent);
+  color: #04070d;
+  font-weight: 600;
+  font-size: 15px;
+}
+button:disabled {
+  opacity: 0.45;
+}
+button.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+}
+button.danger {
+  background: var(--danger);
+  color: #1a0603;
+}
+button.link {
+  background: none;
+  color: var(--accent);
+  padding: 6px 2px;
+  font-weight: 500;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid #2a3140;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  /* 16px avoids iOS Safari zooming on focus. */
+  font-size: 16px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.banner {
+  padding: 8px 14px;
+  background: var(--warn);
+  color: #1b1403;
+  font-size: 13px;
+  text-align: center;
+  border: 0;
+  width: 100%;
+}
+.banner.error {
+  background: var(--danger);
+  color: #200604;
+}
+
+/* --- pairing --- */
+
+.pair {
+  display: grid;
+  gap: 14px;
+  padding: max(20px, env(safe-area-inset-top)) 20px
+    max(20px, env(safe-area-inset-bottom));
+  max-width: 520px;
+  margin: 0 auto;
+}
+.pair h1 {
+  margin: 8px 0 0;
+  font-size: 22px;
+}
+.scanner {
+  display: grid;
+  gap: 10px;
+}
+.scanner video {
+  width: 100%;
+  border-radius: 12px;
+  background: #000;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+}
+.error {
+  color: var(--danger);
+}
+
+/* --- sessions --- */
+
+.sessions {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  padding: max(16px, env(safe-area-inset-top)) 16px
+    max(16px, env(safe-area-inset-bottom));
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  overflow-y: auto;
+}
+.sessions header,
+.sessions footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sessions h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.card {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: var(--panel);
+  color: var(--text);
+  padding: 14px;
+  border-radius: 12px;
+  font-weight: 400;
+}
+.card.form {
+  gap: 12px;
+}
+
+.status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.status.running,
+.status.cancelling {
+  background: rgba(91, 157, 255, 0.18);
+  color: var(--accent);
+}
+.status.waiting_permission {
+  background: rgba(210, 153, 34, 0.2);
+  color: var(--warn);
+}
+.status.failed,
+.status.disconnected {
+  background: rgba(255, 95, 86, 0.18);
+  color: var(--danger);
+}
+.status.idle,
+.status.completed {
+  background: rgba(63, 185, 80, 0.16);
+  color: var(--ok);
+}
+
+/* --- chat --- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.chat header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+  border-bottom: 1px solid #232a35;
+}
+.transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 12px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.bubble {
+  padding: 10px 13px;
+  border-radius: 14px;
+  max-width: 90%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.bubble.user {
+  background: var(--accent);
+  color: #04070d;
+  justify-self: end;
+  border-bottom-right-radius: 4px;
+}
+.bubble.agent {
+  background: var(--panel);
+  border-bottom-left-radius: 4px;
+}
+.bubble.thought {
+  background: transparent;
+  border: 1px dashed #2f3745;
+  color: var(--muted);
+  font-style: italic;
+}
+.bubble.notice {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 13px;
+  justify-self: center;
+  text-align: center;
+}
+.tool {
+  background: var(--panel);
+  border-left: 3px solid var(--muted);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.tool.completed {
+  border-left-color: var(--ok);
+}
+.tool.failed {
+  border-left-color: var(--danger);
+}
+.tool pre,
+.terminal {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: #0a0c10;
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.terminal.stderr {
+  color: #ffb4ae;
+}
+
+.sheet {
+  margin: 0 12px 10px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--warn);
+  border-radius: 14px;
+  display: grid;
+  gap: 10px;
+}
+.sheet h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--warn);
+}
+.sheet pre {
+  margin: 0;
+  padding: 10px;
+  background: #0a0c10;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid #232a35;
+  background: var(--bg);
+}
+.composer textarea {
+  resize: none;
+  max-height: 40vh;
+  field-sizing: content;
+}

@@ -1,0 +1,30 @@
+[package]
+name = "gateway-acp"
+description = "ACP agent runtime and event mapping for Agent Gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gateway-core.workspace = true
+
+agent-client-protocol.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+futures.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+gateway-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["full"] }
+tempfile.workspace = true

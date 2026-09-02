@@ -1,0 +1,31 @@
+[package]
+name = "gateway-relay"
+description = "Relay control-plane client, push notifications and reference relay server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gateway-auth.workspace = true
+gateway-core.workspace = true
+
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
+reqwest.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+gateway-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["full"] }

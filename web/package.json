@@ -1,0 +1,25 @@
+{
+  "name": "agent-gateway-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Phone and browser client for Agent Gateway",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^3.2.0",
+    "jsqr": "^1.4.0",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
