@@ -21,6 +21,10 @@ pairing_ttl = "5m"
 # 来自 127.0.0.1 且不带 tunnel 头的请求可以跳过 ticket 校验，方便本地调试。
 trust_loopback = true
 
+[wechat]
+enabled = true
+api_base = "https://ilinkai.weixin.qq.com"
+
 # [relay]
 # endpoint = "https://relay.example.com"
 # token = "<relay token>"

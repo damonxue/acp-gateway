@@ -94,6 +94,31 @@ where
         message: &crate::inbound::InboundMessage,
     ) -> Result<(), BridgeError> {
         *self.context_token.write().await = Some(message.context_token.clone());
+        if let Some(command) = message.text.strip_prefix('/') {
+            let reply = match command.trim() {
+                "sessions" => Some(self.format_sessions().await?),
+                "session" => Some(self.format_current_session().await?),
+                "help" => Some(
+                    "可用命令：\n/sessions 查看 Gateway session 列表\n/session 查看当前微信绑定\n/help 查看帮助"
+                        .to_owned(),
+                ),
+                _ => None,
+            };
+            if let Some(reply) = reply {
+                let context = self.context_token.read().await.clone();
+                self.outbound
+                    .send_text(
+                        &self.credentials,
+                        &self.binding.binding_id,
+                        &message.message_id,
+                        OutboundRole::Agent,
+                        &reply,
+                        context.as_deref(),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        }
         self.manager
             .send_prompt_from(
                 &self.binding.session_id,
@@ -102,6 +127,27 @@ where
             )
             .await?;
         Ok(())
+    }
+
+    async fn format_current_session(&self) -> Result<String, BridgeError> {
+        let snapshot = self.manager.get_snapshot(&self.binding.session_id).await?;
+        Ok(format_session_line(&snapshot, true))
+    }
+
+    async fn format_sessions(&self) -> Result<String, BridgeError> {
+        let sessions = self.manager.list_sessions().await?;
+        if sessions.is_empty() {
+            return Ok("Gateway 当前没有 session。".to_owned());
+        }
+        let mut lines = vec![format!("Gateway session 列表（{}）：", sessions.len())];
+        for session in sessions {
+            let snapshot = self.manager.get_snapshot(&session.id).await?;
+            lines.push(format_session_line(
+                &snapshot,
+                session.id == self.binding.session_id,
+            ));
+        }
+        Ok(lines.join("\n"))
     }
 
     /// Subscribe to the manager's durable event stream and forward eligible
@@ -175,6 +221,26 @@ where
         }
         Ok(())
     }
+}
+
+fn format_session_line(
+    snapshot: &gateway_core::manager::SessionSnapshot,
+    selected: bool,
+) -> String {
+    let marker = if selected { "*" } else { "-" };
+    let connected = if snapshot.connected {
+        "connected"
+    } else {
+        "disconnected"
+    };
+    format!(
+        "{marker} {} [{} / {} / {}]\n  {}",
+        snapshot.session.id,
+        snapshot.session.origin.as_str(),
+        snapshot.session.status.as_str(),
+        connected,
+        snapshot.session.workspace.display()
+    )
 }
 
 fn content_text(value: Option<&serde_json::Value>) -> String {

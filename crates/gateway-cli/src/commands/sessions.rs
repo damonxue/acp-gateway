@@ -110,16 +110,18 @@ async fn list(client: &LocalClient) -> Result<()> {
         return Ok(());
     }
     println!(
-        "{:<40} {:<10} {:<18} {:<6} WORKSPACE",
-        "ID", "AGENT", "STATUS", "SEQ"
+        "{:<40} {:<10} {:<11} {:<18} {:<6} {:<28} WORKSPACE",
+        "ID", "AGENT", "ORIGIN", "STATUS", "SEQ", "ACP SESSION"
     );
     for session in list.sessions {
         println!(
-            "{:<40} {:<10} {:<18} {:<6} {}",
+            "{:<40} {:<10} {:<11} {:<18} {:<6} {:<28} {}",
             session.id,
             session.agent_id,
+            session.origin.as_str(),
             session.status.as_str(),
             session.last_seq,
+            session.acp_session_id.as_deref().unwrap_or("-"),
             session.workspace.display()
         );
     }

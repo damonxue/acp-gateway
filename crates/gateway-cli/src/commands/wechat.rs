@@ -17,14 +17,14 @@ pub(crate) enum WechatCommand {
     Logout,
     /// Print redacted login status.
     Status,
-    /// Bind one existing Gateway session and chat URI in config.toml.
+    /// Bind one existing Gateway session in config.toml.
     Bind {
         /// Existing Gateway session id.
         #[arg(long = "session")]
         session_id: String,
-        /// Stable AHP chat URI associated with that session.
+        /// Optional chat URI metadata. In embedded mode this defaults to local:<session>.
         #[arg(long = "chat")]
-        chat_id: String,
+        chat_id: Option<String>,
     },
     /// Disable the configured binding while retaining its values for later.
     Unbind,
@@ -94,8 +94,12 @@ pub(crate) async fn run(config: &GatewayConfig, command: WechatCommand, path: &P
             session_id,
             chat_id,
         } => {
-            if session_id.trim().is_empty() || chat_id.trim().is_empty() {
-                anyhow::bail!("session_id and chat_id must not be empty");
+            if session_id.trim().is_empty() {
+                anyhow::bail!("session_id must not be empty");
+            }
+            let chat_id = chat_id.unwrap_or_else(|| format!("local:{session_id}"));
+            if chat_id.trim().is_empty() {
+                anyhow::bail!("chat_id must not be empty when provided");
             }
             update_binding(path, Some((session_id, chat_id)))?;
             println!("WeChat binding saved; restart `agent-gateway run` to apply it");

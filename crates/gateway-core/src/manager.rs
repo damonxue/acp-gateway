@@ -324,6 +324,96 @@ impl SessionManager {
         Ok(recovered)
     }
 
+    /// Re-launch a Gateway-owned session whose agent disappeared with the
+    /// previous daemon process. The persistent session id and event history
+    /// are retained, so bindings such as the embedded WeChat adapter remain
+    /// valid across a Gateway restart.
+    pub async fn resume_gateway_session(self: &Arc<Self>, id: &SessionId) -> Result<AgentSession> {
+        if let Some(managed) = self.sessions.get(id) {
+            return Ok(managed.meta.read().await.clone());
+        }
+
+        let session = self
+            .session_repo
+            .get(id)
+            .await?
+            .ok_or_else(|| GatewayError::SessionNotFound(id.clone()))?;
+        if session.origin != SessionOrigin::Gateway {
+            return Err(GatewayError::InvalidSessionState {
+                session: id.clone(),
+                action: "resume",
+                status: session.status.as_str(),
+            });
+        }
+        if session.status.is_terminal() && session.status != SessionStatus::Disconnected {
+            return Err(GatewayError::InvalidSessionState {
+                session: id.clone(),
+                action: "resume",
+                status: session.status.as_str(),
+            });
+        }
+
+        let descriptor = self
+            .catalog
+            .get(&session.agent_id)
+            .ok_or_else(|| {
+                GatewayError::AgentUnavailable(format!(
+                    "agent `{}` is not configured",
+                    session.agent_id
+                ))
+            })?
+            .clone();
+        let managed = Arc::new(ManagedSession::new(
+            session.clone(),
+            self.config.channel_capacity,
+        ));
+        self.sessions.insert(id.clone(), Arc::clone(&managed));
+
+        info!(session_id = %id, agent = %descriptor.id, "resuming Gateway session");
+        let launched = match self
+            .runtime
+            .launch(LaunchRequest {
+                session_id: session.id.clone(),
+                descriptor: descriptor.clone(),
+                cwd: session.cwd.clone(),
+                additional_directories: Vec::new(),
+                sink: Arc::clone(self) as Arc<dyn EventSink>,
+            })
+            .await
+        {
+            Ok(launched) => launched,
+            Err(error) => {
+                self.sessions.remove(id);
+                warn!(session_id = %id, %error, "agent resume failed");
+                return Err(error);
+            }
+        };
+
+        {
+            let mut meta = managed.meta.write().await;
+            meta.acp_session_id = Some(launched.acp_session_id.clone());
+        }
+        *managed.handle.write().await = Some(launched.handle);
+        self.append_event(
+            id,
+            EventDraft::from_value(
+                EventType::SessionCreated,
+                serde_json::json!({
+                    "session_id": session.id,
+                    "agent_id": descriptor.id,
+                    "agent_name": descriptor.name,
+                    "acp_session_id": launched.acp_session_id,
+                    "workspace": session.workspace,
+                    "cwd": session.cwd,
+                    "origin": SessionOrigin::Gateway,
+                    "resumed": true,
+                }),
+            ),
+        )
+        .await?;
+        self.snapshot_meta(id).await
+    }
+
     // ------------------------------------------------------- session creation
     // ------------------------------------------------------- Session 创建
 

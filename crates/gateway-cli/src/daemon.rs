@@ -159,6 +159,17 @@ async fn start_wechat(
         session_id: gateway_core::SessionId::new(binding.session_id.clone()),
         chat_id: binding.chat_id.clone(),
     };
+    // Gateway-owned ACP processes do not survive a daemon restart. Reattach
+    // the persisted session before starting the WeChat bridge so its binding
+    // remains usable instead of pointing at a permanently disconnected row.
+    if let Err(error) = manager.resume_gateway_session(&binding.session_id).await {
+        warn!(
+            session_id = %binding.session_id,
+            error = %error,
+            "bound session is not a resumable Gateway session; WeChat adapter is idle"
+        );
+        return Ok(WechatSupervisor::disabled());
+    }
     journal
         .recover_sending()
         .await
