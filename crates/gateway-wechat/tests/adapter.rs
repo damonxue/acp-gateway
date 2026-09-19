@@ -122,7 +122,7 @@ async fn outbound_chunks_and_marks_sent() {
         sent[0].item_list[0]
             .text_item
             .text
-            .starts_with("[VS Code User 1/2]\n")
+            .starts_with("[acp-gw User 1/2]\n")
     );
     assert!(sent.iter().all(|message| message.context_token == "ctx"));
 }

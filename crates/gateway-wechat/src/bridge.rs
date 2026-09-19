@@ -306,6 +306,28 @@ where
                         .await?;
                 }
             }
+            // Codex emits its terminal turn state as an extension metadata
+            // update. Some IDE-originated turns do not produce a separate
+            // prompt response before the bridge is refreshed, so use the
+            // terminal state as an idempotent completion fallback. A later
+            // `session_completed` sees an empty accumulator and sends nothing.
+            "session_update" if is_idle_update(&event.payload) => {
+                let text = std::mem::take(answer);
+                if !text.trim().is_empty() {
+                    let context = self.context_token.read().await.clone();
+                    let _ = self
+                        .outbound
+                        .send_text(
+                            &self.credentials,
+                            &binding.binding_id,
+                            &event.id.to_string(),
+                            OutboundRole::Agent,
+                            &text,
+                            context.as_deref(),
+                        )
+                        .await?;
+                }
+            }
             "session_failed" => answer.clear(),
             _ => {}
         }
@@ -346,5 +368,30 @@ fn content_text(value: Option<&serde_json::Value>) -> String {
             items.iter().map(|item| content_text(Some(item))).collect()
         }
         _ => String::new(),
+    }
+}
+
+fn is_idle_update(payload: &serde_json::Value) -> bool {
+    payload
+        .get("_meta")
+        .and_then(|value| value.get("codex"))
+        .and_then(|value| value.get("threadStatus"))
+        .and_then(|value| value.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("idle")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_idle_update;
+
+    #[test]
+    fn recognizes_codex_idle_turn_metadata() {
+        assert!(is_idle_update(&serde_json::json!({
+            "_meta": {"codex": {"threadStatus": {"type": "idle"}}}
+        })));
+        assert!(!is_idle_update(&serde_json::json!({
+            "_meta": {"codex": {"threadStatus": {"type": "active"}}}
+        })));
     }
 }

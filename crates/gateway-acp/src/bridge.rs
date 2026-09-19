@@ -169,6 +169,12 @@ async fn handle_from_ide(
     }
 
     if let Some(request) = parse_dispatch::<PromptRequest>(&dispatch)? {
+        // The prompt carries the session id Zed is actively tracking. Keep it
+        // authoritative for daemon-originated notifications as well; this
+        // also repairs a stale id after an IDE bridge reattach.
+        state
+            .remember_prompt_session(request.session_id.clone())
+            .await;
         state
             .emit_event(
                 EventType::UserMessage,
@@ -191,19 +197,25 @@ async fn handle_from_ide(
         let real_agent = state.real_agent().await?;
         let state_for_result = Arc::clone(&state);
         let cancellation = responder.cancellation();
-        real_agent
-            .send_request(request)
-            .forward_cancellation_from(cancellation)
-            .on_receiving_result(async move |result| {
-                let draft = match &result {
-                    Ok(response) => mapper::turn_completed_event(response.stop_reason),
-                    Err(error) => mapper::failure_event(error, false),
-                };
-                state_for_result
-                    .emit_event(draft.event_type, draft.payload)
-                    .await;
-                responder.respond_with_result(result.map(|response| json_value(&response)))
-            })?;
+        // Consume the downstream response in a task outside the IDE dispatch
+        // loop. `on_receiving_result` is callback-oriented and ordered against
+        // the connection dispatch; using `block_task` here keeps the incoming
+        // IDE request handler free while making completion recording explicit.
+        tokio::spawn(async move {
+            let result = real_agent
+                .send_request(request)
+                .forward_cancellation_from(cancellation)
+                .block_task()
+                .await;
+            let draft = match &result {
+                Ok(response) => mapper::turn_completed_event(response.stop_reason),
+                Err(error) => mapper::failure_event(error, false),
+            };
+            state_for_result
+                .emit_event(draft.event_type, draft.payload)
+                .await;
+            responder.respond_with_result(result.map(|response| json_value(&response)))
+        });
         return Ok(agent_client_protocol::Handled::Yes);
     }
 
@@ -301,20 +313,15 @@ async fn command_loop(
                     }
                 }
                 let state = Arc::clone(&state);
-                if let Err(error) =
-                    real_agent
-                        .send_request(request)
-                        .on_receiving_result(async move |result| {
-                            let draft = match result {
-                                Ok(response) => mapper::turn_completed_event(response.stop_reason),
-                                Err(error) => mapper::failure_event(error, false),
-                            };
-                            state.emit_event(draft.event_type, draft.payload).await;
-                            Ok(())
-                        })
-                {
-                    warn!(%error, "cannot forward daemon prompt into IDE bridge");
-                }
+                let real_agent = real_agent.clone();
+                tokio::spawn(async move {
+                    let result = real_agent.send_request(request).block_task().await;
+                    let draft = match result {
+                        Ok(response) => mapper::turn_completed_event(response.stop_reason),
+                        Err(error) => mapper::failure_event(error, false),
+                    };
+                    state.emit_event(draft.event_type, draft.payload).await;
+                });
             }
             DaemonMessage::Cancel => {
                 if mode == BridgeControlMode::ReadOnly {
@@ -394,6 +401,10 @@ impl BridgeState {
 
     async fn remember_new_session(&self, request: NewSessionRequest) {
         *self.new_session.write().await = Some(request);
+    }
+
+    async fn remember_prompt_session(&self, session_id: AcpSessionId) {
+        *self.acp_session_id.write().await = Some(session_id);
     }
 
     async fn adopt(&self, acp_session_id: AcpSessionId) {

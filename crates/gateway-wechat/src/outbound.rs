@@ -225,8 +225,8 @@ fn present_chunks(
         return split_text_with_limits(text, max_text_bytes, max_chunk_bytes)
             .map_err(OutboundError::InvalidText);
     }
-    let prefix = "[VS Code User]\n";
-    let reserve = "[VS Code User 16/16]\n".len();
+    let prefix = "[acp-gw User]\n";
+    let reserve = "[acp-gw User 16/16]\n".len();
     let parts = split_text_with_limits(
         text,
         max_text_bytes,
@@ -240,6 +240,6 @@ fn present_chunks(
     Ok(parts
         .into_iter()
         .enumerate()
-        .map(|(index, part)| format!("[VS Code User {}/{}]\n{part}", index + 1, total))
+        .map(|(index, part)| format!("[acp-gw User {}/{}]\n{part}", index + 1, total))
         .collect())
 }
