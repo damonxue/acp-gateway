@@ -759,8 +759,8 @@ impl SessionManager {
     /// Submit a prompt and record its source in the user-message echo.
     ///
     /// A source is intentionally optional so existing API clients keep the
-    /// exact historical payload. Channel adapters can mark their own echo,
-    /// which prevents forwarding an inbound message back to the same channel.
+    /// exact historical payload. Channel adapters can mark their own echo so
+    /// downstream consumers can identify where the prompt originated.
     pub async fn send_prompt_from(
         &self,
         id: &SessionId,

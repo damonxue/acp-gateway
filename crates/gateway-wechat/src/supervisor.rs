@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use gateway_core::SessionId;
 use gateway_core::SessionManager;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -15,10 +17,16 @@ use crate::types::Credentials;
 #[derive(Debug)]
 pub struct WechatSupervisor {
     cancel: CancellationToken,
+    rebind_tx: Option<mpsc::Sender<SessionId>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl WechatSupervisor {
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.rebind_tx.is_some()
+    }
+
     pub fn start<A, J>(
         manager: Arc<SessionManager>,
         api: Arc<A>,
@@ -73,6 +81,13 @@ impl WechatSupervisor {
                 }
             }
         });
+        let (rebind_tx, mut rebind_rx) = mpsc::channel(16);
+        let rebind_bridge = Arc::clone(&bridge);
+        let rebind_task = tokio::spawn(async move {
+            while let Some(session_id) = rebind_rx.recv().await {
+                rebind_bridge.rebind(session_id).await;
+            }
+        });
         let poller = Poller::new(
             api,
             journal,
@@ -101,14 +116,27 @@ impl WechatSupervisor {
         });
         Self {
             cancel,
-            tasks: Mutex::new(vec![bridge_task, poller_task]),
+            rebind_tx: Some(rebind_tx),
+            tasks: Mutex::new(vec![bridge_task, poller_task, rebind_task]),
         }
+    }
+
+    /// Switch the WeChat bridge to another live Gateway session.
+    pub async fn rebind(&self, session_id: SessionId) -> Result<(), String> {
+        let Some(sender) = &self.rebind_tx else {
+            return Err("WeChat adapter is disabled".to_owned());
+        };
+        sender
+            .send(session_id)
+            .await
+            .map_err(|_| "WeChat adapter is stopped".to_owned())
     }
 
     #[must_use]
     pub fn disabled() -> Self {
         Self {
             cancel: CancellationToken::new(),
+            rebind_tx: None,
             tasks: Mutex::new(Vec::new()),
         }
     }

@@ -17,7 +17,7 @@ pub(crate) enum WechatCommand {
     Logout,
     /// Print redacted login status.
     Status,
-    /// Bind one existing Gateway session in config.toml.
+    /// Optionally pin WeChat to a Gateway session in config.toml.
     Bind {
         /// Existing Gateway session id.
         #[arg(long = "session")]
@@ -102,12 +102,14 @@ pub(crate) async fn run(config: &GatewayConfig, command: WechatCommand, path: &P
                 anyhow::bail!("chat_id must not be empty when provided");
             }
             update_binding(path, Some((session_id, chat_id)))?;
-            println!("WeChat binding saved; restart `agent-gateway run` to apply it");
+            println!(
+                "WeChat binding saved; a running daemon will use the active Zed session automatically"
+            );
             Ok(())
         }
         WechatCommand::Unbind => {
             update_binding(path, None)?;
-            println!("WeChat binding disabled; restart `agent-gateway run` to apply it");
+            println!("WeChat binding disabled; restart the daemon to apply this config change");
             Ok(())
         }
     }

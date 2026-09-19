@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use gateway_core::agent::PromptBlock;
@@ -35,11 +35,12 @@ pub enum BridgeError {
 #[derive(Debug)]
 pub struct WechatBridge<A, J> {
     manager: Arc<SessionManager>,
-    binding: Binding,
+    binding: Arc<RwLock<Binding>>,
     credentials: Credentials,
     outbound: OutboundSender<A, J>,
     context_token: Arc<RwLock<Option<String>>>,
     cancel: CancellationToken,
+    rebind_notify: Arc<Notify>,
 }
 
 impl<A, J> WechatBridge<A, J>
@@ -79,21 +80,36 @@ where
     ) -> Self {
         Self {
             manager,
-            binding,
+            binding: Arc::new(RwLock::new(binding)),
             credentials,
             outbound: OutboundSender::new(api, Arc::clone(&journal))
                 .with_limits(max_text_bytes, max_chunk_bytes),
             context_token: Arc::new(RwLock::new(None)),
             cancel,
+            rebind_notify: Arc::new(Notify::new()),
         }
     }
 
+    /// Switch the active Gateway session without restarting the WeChat
+    /// poller or losing the conversation context and outbox journal.
+    pub async fn rebind(&self, session_id: SessionId) {
+        let mut binding = self.binding.write().await;
+        if binding.session_id == session_id {
+            return;
+        }
+        binding.session_id = session_id;
+        drop(binding);
+        self.rebind_notify.notify_waiters();
+    }
+
     /// Deliver an accepted inbound message into the selected session. The
-    /// source marker prevents this event from being echoed back to WeChat.
+    /// source marker identifies the originating channel while the event stream
+    /// still mirrors the user message to both sides.
     pub async fn accept_inbound(
         &self,
         message: &crate::inbound::InboundMessage,
     ) -> Result<(), BridgeError> {
+        let binding = self.binding.read().await.clone();
         *self.context_token.write().await = Some(message.context_token.clone());
         if let Some(command) = message.text.strip_prefix('/') {
             let reply = match command.trim() {
@@ -110,7 +126,7 @@ where
                 self.outbound
                     .send_text(
                         &self.credentials,
-                        &self.binding.binding_id,
+                        &binding.binding_id,
                         &message.message_id,
                         OutboundRole::Agent,
                         &reply,
@@ -120,10 +136,10 @@ where
                 return Ok(());
             }
         }
-        self.wait_for_live_session().await?;
+        let session_id = self.wait_for_live_session().await?;
         self.manager
             .send_prompt_from(
-                &self.binding.session_id,
+                &session_id,
                 vec![PromptBlock::text(message.text.clone())],
                 Some("wechat"),
             )
@@ -131,7 +147,7 @@ where
         Ok(())
     }
 
-    async fn wait_for_live_session(&self) -> Result<(), BridgeError> {
+    async fn wait_for_live_session(&self) -> Result<SessionId, BridgeError> {
         loop {
             if self.cancel.is_cancelled() {
                 return Err(BridgeError::Gateway(
@@ -140,9 +156,10 @@ where
                     ),
                 ));
             }
-            match self.manager.get_snapshot(&self.binding.session_id).await {
+            let session_id = self.binding.read().await.session_id.clone();
+            match self.manager.get_snapshot(&session_id).await {
                 Ok(snapshot) if snapshot.connected && snapshot.session.status.is_drivable() => {
-                    return Ok(());
+                    return Ok(snapshot.session.id);
                 }
                 Ok(snapshot)
                     if matches!(
@@ -152,7 +169,7 @@ where
                 {
                     return Err(BridgeError::Gateway(
                         gateway_core::GatewayError::InvalidSessionState {
-                            session: self.binding.session_id.clone(),
+                            session: session_id.clone(),
                             action: "prompt",
                             status: snapshot.session.status.as_str(),
                         },
@@ -169,18 +186,21 @@ where
                         ),
                     ));
                 }
+                _ = self.rebind_notify.notified() => {}
                 _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
             }
         }
     }
 
     async fn format_current_session(&self) -> Result<String, BridgeError> {
-        let snapshot = self.manager.get_snapshot(&self.binding.session_id).await?;
+        let binding = self.binding.read().await.clone();
+        let snapshot = self.manager.get_snapshot(&binding.session_id).await?;
         Ok(format_session_line(&snapshot, true))
     }
 
     async fn format_sessions(&self) -> Result<String, BridgeError> {
         let sessions = self.manager.list_sessions().await?;
+        let binding = self.binding.read().await.clone();
         if sessions.is_empty() {
             return Ok("Gateway 当前没有 session。".to_owned());
         }
@@ -189,7 +209,7 @@ where
             let snapshot = self.manager.get_snapshot(&session.id).await?;
             lines.push(format_session_line(
                 &snapshot,
-                session.id == self.binding.session_id,
+                session.id == binding.session_id,
             ));
         }
         Ok(lines.join("\n"))
@@ -200,7 +220,8 @@ where
     /// partial progress are intentionally excluded.
     pub async fn run(self: Arc<Self>) -> Result<(), BridgeError> {
         loop {
-            let mut subscription = match self.manager.subscribe(&self.binding.session_id) {
+            let session_id = self.binding.read().await.session_id.clone();
+            let mut subscription = match self.manager.subscribe(&session_id) {
                 Ok(subscription) => subscription,
                 Err(gateway_core::GatewayError::SessionNotFound(_)) => {
                     tokio::select! {
@@ -213,6 +234,7 @@ where
             let mut answer = String::new();
             let event = tokio::select! {
                 _ = self.cancel.cancelled() => return Ok(()),
+                _ = self.rebind_notify.notified() => continue,
                 event = subscription.recv() => match event {
                     Ok(event) => event,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -223,6 +245,7 @@ where
             loop {
                 let event = tokio::select! {
                     _ = self.cancel.cancelled() => return Ok(()),
+                    _ = self.rebind_notify.notified() => break,
                     event = subscription.recv() => match event {
                         Ok(event) => event,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
@@ -239,11 +262,9 @@ where
         event: &AgentEvent,
         answer: &mut String,
     ) -> Result<(), BridgeError> {
+        let binding = self.binding.read().await.clone();
         match event.event_type.as_str() {
             "user_message" => {
-                if event.payload.get("source").and_then(|value| value.as_str()) == Some("wechat") {
-                    return Ok(());
-                }
                 let text = content_text(event.payload.get("content"));
                 if !text.is_empty() {
                     let context = self.context_token.read().await.clone();
@@ -251,7 +272,7 @@ where
                         .outbound
                         .send_text(
                             &self.credentials,
-                            &self.binding.binding_id,
+                            &binding.binding_id,
                             &event.id.to_string(),
                             OutboundRole::VsCodeUser,
                             &text,
@@ -276,7 +297,7 @@ where
                         .outbound
                         .send_text(
                             &self.credentials,
-                            &self.binding.binding_id,
+                            &binding.binding_id,
                             &event.id.to_string(),
                             OutboundRole::Agent,
                             &text,

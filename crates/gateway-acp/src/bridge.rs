@@ -26,9 +26,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    CancelNotification, NewSessionRequest, NewSessionResponse, PromptRequest,
+    CancelNotification, ContentChunk, NewSessionRequest, NewSessionResponse, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionId as AcpSessionId, SessionNotification,
+    SessionId as AcpSessionId, SessionNotification, SessionUpdate,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo, Dispatch, JsonRpcMessage,
@@ -139,6 +139,7 @@ pub async fn run_bridge(config: AcpBridgeConfig) -> Result<()> {
             tokio::spawn(command_loop(
                 commands,
                 real_agent.clone(),
+                ide.clone(),
                 Arc::clone(&state),
                 config.control_mode,
             ));
@@ -174,6 +175,36 @@ async fn handle_from_ide(
                 json!({ "content": json_value(&request.prompt) }),
             )
             .await;
+
+        // A prompt that originates in the IDE is already an ACP request. The
+        // old raw proxy path forwarded its response back to Zed, but never
+        // observed that response in the gateway event stream. That left
+        // downstream adapters waiting forever for `session_completed` after a
+        // Zed-originated turn, even though Zed itself received the answer.
+        // Consume the forwarded response here so we can mirror the same
+        // completion/failure event emitted by daemon-originated prompts while
+        // still returning the exact ACP response to the IDE.
+        let Dispatch::Request(_, responder) = dispatch else {
+            return Err(agent_client_protocol::Error::internal_error()
+                .data("prompt dispatch was not a request"));
+        };
+        let real_agent = state.real_agent().await?;
+        let state_for_result = Arc::clone(&state);
+        let cancellation = responder.cancellation();
+        real_agent
+            .send_request(request)
+            .forward_cancellation_from(cancellation)
+            .on_receiving_result(async move |result| {
+                let draft = match &result {
+                    Ok(response) => mapper::turn_completed_event(response.stop_reason),
+                    Err(error) => mapper::failure_event(error, false),
+                };
+                state_for_result
+                    .emit_event(draft.event_type, draft.payload)
+                    .await;
+                responder.respond_with_result(result.map(|response| json_value(&response)))
+            })?;
+        return Ok(agent_client_protocol::Handled::Yes);
     }
 
     if parse_dispatch::<CancelNotification>(&dispatch)?.is_some() {
@@ -243,6 +274,7 @@ async fn handle_from_agent(
 async fn command_loop(
     mut commands: mpsc::Receiver<DaemonMessage>,
     real_agent: ConnectionTo<Agent>,
+    ide: ConnectionTo<Client>,
     state: Arc<BridgeState>,
     mode: BridgeControlMode,
 ) {
@@ -260,6 +292,14 @@ async fn command_loop(
                     continue;
                 };
                 let request = mapper::prompt_request(&acp_session_id, &blocks);
+                for block in &request.prompt {
+                    if let Err(error) = ide.send_notification(SessionNotification::new(
+                        acp_session_id.clone(),
+                        SessionUpdate::UserMessageChunk(ContentChunk::new(block.clone())),
+                    )) {
+                        warn!(%error, "cannot mirror remote user message to the IDE");
+                    }
+                }
                 let state = Arc::clone(&state);
                 if let Err(error) =
                     real_agent

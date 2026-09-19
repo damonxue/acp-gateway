@@ -414,7 +414,7 @@ async fn forward_events(
                 if !text.is_empty() {
                     let _ = outgoing
                         .send(ClientFrame::UserMessage {
-                            text: format!("[VS Code User] {text}"),
+                            text: format!("[acp-gw User] {text}"),
                         })
                         .await;
                 }

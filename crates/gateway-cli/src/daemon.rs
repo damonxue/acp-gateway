@@ -13,6 +13,7 @@ use gateway_core::agent::AgentRuntime;
 use gateway_core::machine::Machine;
 use gateway_core::manager::{AgentCatalog, SessionManager, SessionManagerConfig};
 use gateway_core::ports::{Clock, MachineRepository, SystemClock};
+use gateway_core::session::SessionOrigin;
 use gateway_relay::{RelayClient, RelayStatus, RelayWorker};
 use gateway_remote::{AppState, ComponentHealth, HealthSource, RemoteServer};
 use gateway_store::Database;
@@ -78,6 +79,9 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     let relay = Arc::new(start_relay(&config, &identity, &manager, &machine)?);
     let ahp = Arc::new(start_ahp(&config, &identity, &manager)?);
     let wechat = Arc::new(start_wechat(&config, &identity, &manager, &database).await?);
+    let wechat_auto_bind = wechat
+        .is_enabled()
+        .then(|| tokio::spawn(auto_bind_wechat(Arc::clone(&manager), Arc::clone(&wechat))));
 
     let state = AppState::new(
         Arc::clone(&manager),
@@ -119,6 +123,9 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     tunnel.shutdown();
     ahp.shutdown();
     wechat.shutdown();
+    if let Some(task) = wechat_auto_bind {
+        task.abort();
+    }
     manager.shutdown_all().await;
     database.close().await;
     result.context("the gateway API stopped unexpectedly")
@@ -133,10 +140,7 @@ async fn start_wechat(
     let Some(section) = config.wechat.as_ref().filter(|section| section.enabled) else {
         return Ok(WechatSupervisor::disabled());
     };
-    let Some(binding) = section.binding.as_ref() else {
-        warn!("wechat is enabled but no [wechat.binding] is configured; adapter is idle");
-        return Ok(WechatSupervisor::disabled());
-    };
+    let configured_binding = section.binding.as_ref();
     let store = KeychainCredentialStore::default();
     let credentials = match store.load() {
         Ok(Some(credentials)) => credentials,
@@ -154,39 +158,46 @@ async fn start_wechat(
             .context("invalid stored WeChat API base")?,
     );
     let journal = Arc::new(SqliteJournal::new(database.pool().clone()));
+    let session_id = active_ide_session(manager)
+        .await
+        .or_else(|| {
+            configured_binding
+                .map(|binding| gateway_core::SessionId::new(binding.session_id.clone()))
+        })
+        .unwrap_or_else(|| gateway_core::SessionId::new("__auto_ide_session__"));
+    let chat_id = configured_binding
+        .map(|binding| binding.chat_id.clone())
+        .unwrap_or_else(|| format!("local:{session_id}"));
     let binding = WechatBinding {
-        binding_id: format!("{}:{}", identity.machine_id(), binding.session_id),
-        session_id: gateway_core::SessionId::new(binding.session_id.clone()),
-        chat_id: binding.chat_id.clone(),
+        // Keep one stable journal namespace while the active Zed session is
+        // switched underneath the adapter.
+        binding_id: format!("{}:wechat", identity.machine_id()),
+        session_id,
+        chat_id,
     };
     // Gateway-owned ACP processes do not survive a daemon restart, so restore
     // those sessions before starting the adapter. IDE-owned sessions are
     // restored by the bridge itself; the adapter waits for that reattachment.
-    let persisted = match manager.get_session(&binding.session_id).await {
-        Ok(session) => session,
-        Err(error) => {
+    if let Ok(persisted) = manager.get_session(&binding.session_id).await {
+        if persisted.origin == SessionOrigin::Gateway
+            && let Err(error) = manager.resume_gateway_session(&binding.session_id).await
+        {
             warn!(
                 session_id = %binding.session_id,
                 error = %error,
-                "bound session was not found; WeChat adapter is idle"
+                "bound Gateway session could not be resumed; WeChat adapter will wait for an IDE session"
             );
-            return Ok(WechatSupervisor::disabled());
         }
-    };
-    if persisted.origin == gateway_core::session::SessionOrigin::Gateway
-        && let Err(error) = manager.resume_gateway_session(&binding.session_id).await
-    {
-        warn!(
-            session_id = %binding.session_id,
-            error = %error,
-            "bound Gateway session could not be resumed; WeChat adapter is idle"
-        );
-        return Ok(WechatSupervisor::disabled());
-    }
-    if persisted.origin == gateway_core::session::SessionOrigin::IdeBridge {
+        if persisted.origin == SessionOrigin::IdeBridge {
+            info!(
+                session_id = %binding.session_id,
+                "waiting for the IDE bridge to reattach the bound session"
+            );
+        }
+    } else {
         info!(
             session_id = %binding.session_id,
-            "waiting for the IDE bridge to reattach the bound session"
+            "WeChat adapter will bind automatically when an active IDE session appears"
         );
     }
     journal
@@ -203,6 +214,47 @@ async fn start_wechat(
         section.max_text_bytes,
         section.max_chunk_bytes,
     ))
+}
+
+/// Pick the most recently updated live Zed/IDE session. The persistent list
+/// alone is insufficient because a retained bridge session may be disconnected
+/// until Zed reattaches its ACP process.
+async fn active_ide_session(manager: &Arc<SessionManager>) -> Option<gateway_core::SessionId> {
+    let sessions = manager.list_sessions().await.ok()?;
+    for session in sessions {
+        if session.origin != SessionOrigin::IdeBridge {
+            continue;
+        }
+        let Ok(snapshot) = manager.get_snapshot(&session.id).await else {
+            continue;
+        };
+        if snapshot.connected && snapshot.session.status.is_drivable() {
+            return Some(session.id);
+        }
+    }
+    None
+}
+
+/// Keep the embedded WeChat adapter pointed at the newest active Zed session.
+/// A bridge reattach emits a lifecycle update, so this takes effect without a
+/// daemon restart or another `wechat bind` command.
+async fn auto_bind_wechat(manager: Arc<SessionManager>, wechat: Arc<WechatSupervisor>) {
+    let mut lifecycle = manager.subscribe_lifecycle();
+    bind_active_wechat(&manager, &wechat).await;
+    loop {
+        if lifecycle.recv().await.is_err() {
+            return;
+        }
+        bind_active_wechat(&manager, &wechat).await;
+    }
+}
+
+async fn bind_active_wechat(manager: &Arc<SessionManager>, wechat: &WechatSupervisor) {
+    if let Some(session_id) = active_ide_session(manager).await
+        && let Err(error) = wechat.rebind(session_id.clone()).await
+    {
+        warn!(session_id = %session_id, %error, "automatic WeChat session bind failed");
+    }
 }
 
 fn start_ahp(
