@@ -19,7 +19,7 @@
 //! 本桥接进程有意只支持单个 IDE Session。这与 daemon 端 bridge socket 的契约一致，
 //! 也让生命周期语义清晰：IDE 连接关闭时，镜像 Session 断开，历史保留。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -136,14 +136,12 @@ pub async fn run_bridge(config: AcpBridgeConfig) -> Result<()> {
             let real_agent = ide.spawn_connection(agent_side, transport)?;
             state.attach_real_agent(real_agent.clone()).await;
 
-            if let Some(commands) = commands {
-                tokio::spawn(command_loop(
-                    commands,
-                    real_agent.clone(),
-                    Arc::clone(&state),
-                    config.control_mode,
-                ));
-            }
+            tokio::spawn(command_loop(
+                commands,
+                real_agent.clone(),
+                Arc::clone(&state),
+                config.control_mode,
+            ));
 
             tokio::select! {
                 () = ide.incoming_closed() => {
@@ -491,83 +489,130 @@ impl std::fmt::Debug for PendingPermission {
 
 #[derive(Clone, Debug)]
 struct DaemonReporter {
-    outgoing: Option<mpsc::Sender<BridgeMessage>>,
+    outgoing: mpsc::Sender<BridgeMessage>,
 }
 
 impl DaemonReporter {
     async fn send(&self, message: BridgeMessage) {
-        if let Some(outgoing) = &self.outgoing {
-            outgoing.send(message).await.ok();
-        }
+        self.outgoing.send(message).await.ok();
     }
 }
 
 #[derive(Debug)]
 struct DaemonLink {
     reporter: DaemonReporter,
-    commands: Option<mpsc::Receiver<DaemonMessage>>,
+    commands: mpsc::Receiver<DaemonMessage>,
 }
 
 impl DaemonLink {
     async fn connect(url: String, queue: usize) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::channel(queue);
         let (incoming_tx, incoming_rx) = mpsc::channel(queue);
-        match connect_async(&url).await {
-            Ok((socket, _)) => {
-                tokio::spawn(daemon_socket(socket, outgoing_rx, incoming_tx));
-                Self {
-                    reporter: DaemonReporter {
-                        outgoing: Some(outgoing_tx),
-                    },
-                    commands: Some(incoming_rx),
-                }
-            }
-            Err(error) => {
-                warn!(%url, %error, "cannot connect to gateway daemon; proxying without mirroring");
-                Self {
-                    reporter: DaemonReporter { outgoing: None },
-                    commands: None,
-                }
-            }
+        tokio::spawn(daemon_supervisor(url, outgoing_rx, incoming_tx));
+        Self {
+            reporter: DaemonReporter {
+                outgoing: outgoing_tx,
+            },
+            commands: incoming_rx,
         }
     }
 }
 
-async fn daemon_socket(
-    socket: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+/// Keep the IDE bridge connected to the daemon when the daemon is restarted or
+/// starts after Zed. Bridge messages are queued while the socket is down, and
+/// the latest `adopt` announcement is replayed on every new connection so the
+/// daemon can reattach the retained Gateway session.
+async fn daemon_supervisor(
+    url: String,
     mut outgoing: mpsc::Receiver<BridgeMessage>,
     incoming: mpsc::Sender<DaemonMessage>,
 ) {
-    let (mut sink, mut stream) = socket.split();
+    let mut pending = VecDeque::new();
+    let mut last_adopt: Option<BridgeMessage> = None;
     loop {
-        tokio::select! {
-            message = outgoing.recv() => {
-                let Some(message) = message else { break };
-                let Ok(text) = serde_json::to_string(&message) else { continue };
-                if sink.send(Message::Text(text.into())).await.is_err() {
-                    break;
-                }
+        while let Ok(message) = outgoing.try_recv() {
+            if matches!(message, BridgeMessage::Adopt { .. }) {
+                last_adopt = Some(message.clone());
             }
-            frame = stream.next() => {
-                let Some(Ok(frame)) = frame else { break };
-                let Message::Text(text) = frame else {
-                    if matches!(frame, Message::Close(_)) {
-                        break;
+            pending.push_back(message);
+        }
+
+        match connect_async(&url).await {
+            Ok((socket, _)) => {
+                info!(%url, "connected IDE bridge to gateway daemon");
+                let (mut sink, mut stream) = socket.split();
+
+                if let Some(adopt) = last_adopt.clone() {
+                    let Ok(text) = serde_json::to_string(&adopt) else {
+                        continue;
+                    };
+                    if sink.send(Message::Text(text.into())).await.is_err() {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
                     }
-                    continue;
-                };
-                match serde_json::from_str::<DaemonMessage>(&text) {
-                    Ok(message) => {
-                        if incoming.send(message).await.is_err() {
-                            break;
+                    if let Some(index) = pending
+                        .iter()
+                        .position(|message| matches!(message, BridgeMessage::Adopt { .. }))
+                    {
+                        pending.remove(index);
+                    }
+                }
+
+                'connected: loop {
+                    while let Some(message) = pending.pop_front() {
+                        let Ok(text) = serde_json::to_string(&message) else {
+                            continue;
+                        };
+                        if sink.send(Message::Text(text.into())).await.is_err() {
+                            pending.push_front(message);
+                            break 'connected;
                         }
                     }
-                    Err(error) => warn!(%error, "unparsable daemon bridge message"),
+
+                    tokio::select! {
+                        message = outgoing.recv() => {
+                            let Some(message) = message else { return };
+                            if matches!(message, BridgeMessage::Adopt { .. }) {
+                                last_adopt = Some(message.clone());
+                            }
+                            let Ok(text) = serde_json::to_string(&message) else { continue };
+                            if sink.send(Message::Text(text.into())).await.is_err() {
+                                pending.push_back(message);
+                                break 'connected;
+                            }
+                        }
+                        frame = stream.next() => {
+                            let Some(Ok(frame)) = frame else { break 'connected };
+                            let Message::Text(text) = frame else {
+                                if matches!(frame, Message::Close(_)) {
+                                    break 'connected;
+                                }
+                                continue;
+                            };
+                            match serde_json::from_str::<DaemonMessage>(&text) {
+                                Ok(message) => {
+                                    if incoming.send(message).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                Err(error) => warn!(%error, "unparsable daemon bridge message"),
+                            }
+                        }
+                    }
                 }
             }
+            Err(error) => {
+                tracing::debug!(%url, %error, "gateway daemon unavailable; retrying IDE bridge connection");
+            }
         }
+
+        while let Ok(message) = outgoing.try_recv() {
+            if matches!(message, BridgeMessage::Adopt { .. }) {
+                last_adopt = Some(message.clone());
+            }
+            pending.push_back(message);
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 

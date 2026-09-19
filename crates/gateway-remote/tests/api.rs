@@ -309,6 +309,69 @@ async fn bridge_socket_detaches_on_request_and_marks_history_disconnected() {
 }
 
 #[tokio::test]
+async fn bridge_reconnect_reattaches_the_same_acp_session() {
+    let harness = Harness::start().await;
+    let adopt = || {
+        serde_json::to_string(&BridgeMessage::Adopt {
+            agent_id: AgentId::new("zed-codex"),
+            agent_name: "Codex via Zed".to_owned(),
+            acp_session_id: "acp-reconnect".to_owned(),
+            workspace: "/tmp/project".into(),
+            cwd: "/tmp/project".into(),
+        })
+        .unwrap()
+    };
+
+    let (mut first, _) = tokio_tungstenite::connect_async(harness.ws_url("/bridge"))
+        .await
+        .unwrap();
+    first
+        .send(tungstenite::Message::Text(adopt().into()))
+        .await
+        .unwrap();
+    let first_id = next_json(&mut first).await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    first
+        .send(tungstenite::Message::Text(
+            serde_json::to_string(&BridgeMessage::Detach {
+                reason: "temporary daemon disconnect".to_owned(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(1), first.next()).await;
+
+    let (mut second, _) = tokio_tungstenite::connect_async(harness.ws_url("/bridge"))
+        .await
+        .unwrap();
+    second
+        .send(tungstenite::Message::Text(adopt().into()))
+        .await
+        .unwrap();
+    let second_id = next_json(&mut second).await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(second_id, first_id);
+
+    let snapshot: Value = harness
+        .client()
+        .get(harness.url(&format!("/sessions/{second_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(snapshot["connected"], true);
+    assert_eq!(snapshot["status"], "idle");
+}
+
+#[tokio::test]
 async fn two_bridge_connections_adopt_independent_sessions() {
     let harness = Harness::start().await;
     let (mut left, _) = tokio_tungstenite::connect_async(harness.ws_url("/bridge"))

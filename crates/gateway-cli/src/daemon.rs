@@ -159,16 +159,35 @@ async fn start_wechat(
         session_id: gateway_core::SessionId::new(binding.session_id.clone()),
         chat_id: binding.chat_id.clone(),
     };
-    // Gateway-owned ACP processes do not survive a daemon restart. Reattach
-    // the persisted session before starting the WeChat bridge so its binding
-    // remains usable instead of pointing at a permanently disconnected row.
-    if let Err(error) = manager.resume_gateway_session(&binding.session_id).await {
+    // Gateway-owned ACP processes do not survive a daemon restart, so restore
+    // those sessions before starting the adapter. IDE-owned sessions are
+    // restored by the bridge itself; the adapter waits for that reattachment.
+    let persisted = match manager.get_session(&binding.session_id).await {
+        Ok(session) => session,
+        Err(error) => {
+            warn!(
+                session_id = %binding.session_id,
+                error = %error,
+                "bound session was not found; WeChat adapter is idle"
+            );
+            return Ok(WechatSupervisor::disabled());
+        }
+    };
+    if persisted.origin == gateway_core::session::SessionOrigin::Gateway
+        && let Err(error) = manager.resume_gateway_session(&binding.session_id).await
+    {
         warn!(
             session_id = %binding.session_id,
             error = %error,
-            "bound session is not a resumable Gateway session; WeChat adapter is idle"
+            "bound Gateway session could not be resumed; WeChat adapter is idle"
         );
         return Ok(WechatSupervisor::disabled());
+    }
+    if persisted.origin == gateway_core::session::SessionOrigin::IdeBridge {
+        info!(
+            session_id = %binding.session_id,
+            "waiting for the IDE bridge to reattach the bound session"
+        );
     }
     journal
         .recover_sending()

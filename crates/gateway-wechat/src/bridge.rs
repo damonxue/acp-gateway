@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use gateway_core::agent::PromptBlock;
 use gateway_core::event::AgentEvent;
+use gateway_core::session::SessionStatus;
 use gateway_core::{SessionId, SessionManager};
 
 use crate::api::WeixinApi;
@@ -119,6 +120,7 @@ where
                 return Ok(());
             }
         }
+        self.wait_for_live_session().await?;
         self.manager
             .send_prompt_from(
                 &self.binding.session_id,
@@ -127,6 +129,49 @@ where
             )
             .await?;
         Ok(())
+    }
+
+    async fn wait_for_live_session(&self) -> Result<(), BridgeError> {
+        loop {
+            if self.cancel.is_cancelled() {
+                return Err(BridgeError::Gateway(
+                    gateway_core::GatewayError::AgentUnavailable(
+                        "WeChat bridge cancelled".to_owned(),
+                    ),
+                ));
+            }
+            match self.manager.get_snapshot(&self.binding.session_id).await {
+                Ok(snapshot) if snapshot.connected && snapshot.session.status.is_drivable() => {
+                    return Ok(());
+                }
+                Ok(snapshot)
+                    if matches!(
+                        snapshot.session.status,
+                        SessionStatus::Completed | SessionStatus::Failed
+                    ) =>
+                {
+                    return Err(BridgeError::Gateway(
+                        gateway_core::GatewayError::InvalidSessionState {
+                            session: self.binding.session_id.clone(),
+                            action: "prompt",
+                            status: snapshot.session.status.as_str(),
+                        },
+                    ));
+                }
+                Ok(_) | Err(gateway_core::GatewayError::SessionNotFound(_)) => {}
+                Err(error) => return Err(BridgeError::Gateway(error)),
+            }
+            tokio::select! {
+                _ = self.cancel.cancelled() => {
+                    return Err(BridgeError::Gateway(
+                        gateway_core::GatewayError::AgentUnavailable(
+                            "WeChat bridge cancelled".to_owned(),
+                        ),
+                    ));
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+            }
+        }
     }
 
     async fn format_current_session(&self) -> Result<String, BridgeError> {
@@ -154,14 +199,38 @@ where
     /// user messages and completed agent text. Thoughts, tools, permissions and
     /// partial progress are intentionally excluded.
     pub async fn run(self: Arc<Self>) -> Result<(), BridgeError> {
-        let mut subscription = self.manager.subscribe(&self.binding.session_id)?;
-        let mut answer = String::new();
         loop {
+            let mut subscription = match self.manager.subscribe(&self.binding.session_id) {
+                Ok(subscription) => subscription,
+                Err(gateway_core::GatewayError::SessionNotFound(_)) => {
+                    tokio::select! {
+                        _ = self.cancel.cancelled() => return Ok(()),
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => continue,
+                    }
+                }
+                Err(error) => return Err(BridgeError::Gateway(error)),
+            };
+            let mut answer = String::new();
             let event = tokio::select! {
                 _ = self.cancel.cancelled() => return Ok(()),
-                event = subscription.recv() => event.map_err(|error| BridgeError::Journal(JournalError::Operation(error.to_string())))?,
+                event = subscription.recv() => match event {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(error) => return Err(BridgeError::Journal(JournalError::Operation(error.to_string()))),
+                },
             };
             self.handle_event(&event, &mut answer).await?;
+            loop {
+                let event = tokio::select! {
+                    _ = self.cancel.cancelled() => return Ok(()),
+                    event = subscription.recv() => match event {
+                        Ok(event) => event,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                        Err(error) => return Err(BridgeError::Journal(JournalError::Operation(error.to_string()))),
+                    },
+                };
+                self.handle_event(&event, &mut answer).await?;
+            }
         }
     }
 

@@ -537,6 +537,9 @@ impl SessionManager {
         self: &Arc<Self>,
         spec: AdoptSessionSpec,
     ) -> Result<AgentSession> {
+        if let Some(session) = self.reattach_bridge_session(&spec).await? {
+            return Ok(session);
+        }
         let now = self.clock.now();
         let session = AgentSession {
             id: SessionId::generate(),
@@ -587,6 +590,75 @@ impl SessionManager {
         .await?;
 
         self.snapshot_meta(&session.id).await
+    }
+
+    /// Reattach a bridge to a retained IDE session when the bridge transport
+    /// was interrupted but the ACP agent kept the same session identity.
+    async fn reattach_bridge_session(
+        &self,
+        spec: &AdoptSessionSpec,
+    ) -> Result<Option<AgentSession>> {
+        let mut candidates: Vec<Arc<ManagedSession>> = self
+            .sessions
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+
+        for session in self
+            .session_repo
+            .list(&self.config.machine_id, self.config.max_session_list)
+            .await?
+        {
+            if session.origin == SessionOrigin::IdeBridge
+                && !matches!(
+                    session.status,
+                    SessionStatus::Completed | SessionStatus::Failed
+                )
+                && session.agent_id == spec.agent_id
+                && session.acp_session_id.as_deref() == Some(spec.acp_session_id.as_str())
+                && session.workspace == spec.workspace
+                && session.cwd == spec.cwd
+                && !self.sessions.contains_key(&session.id)
+            {
+                let session_id = session.id.clone();
+                let managed = Arc::new(ManagedSession::new(session, self.config.channel_capacity));
+                self.sessions.insert(session_id, Arc::clone(&managed));
+                candidates.push(managed);
+                break;
+            }
+        }
+
+        for managed in candidates {
+            let session = managed.meta.read().await.clone();
+            if session.origin != SessionOrigin::IdeBridge
+                || matches!(
+                    session.status,
+                    SessionStatus::Completed | SessionStatus::Failed
+                )
+                || session.agent_id != spec.agent_id
+                || session.acp_session_id.as_deref() != Some(spec.acp_session_id.as_str())
+                || session.workspace != spec.workspace
+                || session.cwd != spec.cwd
+            {
+                continue;
+            }
+            *managed.handle.write().await = Some(Arc::clone(&spec.handle));
+            if session.status == SessionStatus::Disconnected {
+                self.set_status(
+                    &session.id,
+                    SessionStatus::Idle,
+                    Some("IDE bridge reattached"),
+                )
+                .await?;
+            }
+            info!(
+                session_id = %session.id,
+                acp_session_id = %spec.acp_session_id,
+                "reattached IDE bridge session"
+            );
+            return self.snapshot_meta(&session.id).await.map(Some);
+        }
+        Ok(None)
     }
 
     // -------------------------------------------------------------- accessors
@@ -779,6 +851,18 @@ impl SessionManager {
         let Some(managed) = self.sessions.get(id).map(|entry| Arc::clone(&entry)) else {
             return Ok(());
         };
+        // A bridge can reconnect before the old WebSocket task observes its
+        // EOF. In that race the old task must not detach the replacement
+        // handle that has already been installed by reattachment.
+        if managed
+            .handle
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|handle| handle.is_alive())
+        {
+            return Ok(());
+        }
         *managed.handle.write().await = None;
         for entry in managed.pending_permissions.iter() {
             debug!(
