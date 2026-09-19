@@ -61,6 +61,9 @@ enum Command {
     Relay(commands::relay::RelayArgs),
     /// Proxy an IDE-owned ACP session into the gateway daemon.
     AcpBridge(commands::acp_bridge::AcpBridgeArgs),
+    /// Log in and inspect the embedded WeChat adapter.
+    #[command(subcommand)]
+    Wechat(commands::wechat::WechatCommand),
 }
 
 #[tokio::main]
@@ -102,6 +105,7 @@ async fn main() -> Result<()> {
                 Command::Agents => commands::agents::run(&config).await,
                 Command::Sessions(command) => commands::sessions::run(&config, command).await,
                 Command::AcpBridge(args) => commands::acp_bridge::run(&config, args).await,
+                Command::Wechat(command) => commands::wechat::run(&config, command, &path).await,
                 Command::Run | Command::Config(_) | Command::Relay(_) => {
                     unreachable!("handled above")
                 }

@@ -7,3 +7,4 @@ pub(crate) mod devices;
 pub(crate) mod pair;
 pub(crate) mod relay;
 pub(crate) mod sessions;
+pub(crate) mod wechat;

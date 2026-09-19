@@ -26,13 +26,25 @@ trust_loopback = true
 # token = "<relay token>"
 # heartbeat_interval = "30s"
 
-# Outbound Agent Host Protocol channel. This replaces the public tunnel/relay
-# path for the WeChat host: the gateway connects out, then the channel service
-# supplies QR login state and delivers private messages.
+# Optional outbound Agent Host Protocol channel for external clients. The
+# embedded WeChat adapter below talks to Weixin directly and does not use AHP.
 # [ahp]
 # endpoint = "wss://ahp.example.com/channel"
 # token = "<channel token>"
 # reconnect_interval = "3s"
+
+# Embedded WeChat Bot adapter. Tokens are stored in the macOS Keychain (or a
+# platform secret-service implementation), never in this file.
+# [wechat]
+# enabled = true
+# api_base = "https://ilinkai.weixin.qq.com"
+# poll_timeout = "40s"
+# qr_timeout = "5m"
+# max_text_bytes = 16384
+# max_chunk_bytes = 3500
+# [wechat.binding]
+# session_id = "sess_..."
+# chat_id = "ahp-chat:/..."
 
 # [tunnel]
 # mode = "token"                      # or "config"

@@ -93,6 +93,9 @@ pub struct GatewayConfig {
     /// Outbound Agent Host Protocol channel. Absent means "no AHP channel".
     #[serde(default)]
     pub ahp: Option<AhpSection>,
+    /// Embedded WeChat Bot adapter. Credentials are kept in the OS secret store.
+    #[serde(default)]
+    pub wechat: Option<WechatSection>,
     /// Agents this gateway may launch. Discovery is never implicit.
     #[serde(default, rename = "agents")]
     pub agents: Vec<AgentSection>,
@@ -225,6 +228,33 @@ pub struct AhpSection {
     pub reconnect_interval: Duration,
 }
 
+/// `[wechat]` — embedded Weixin Bot adapter settings.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WechatSection {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_wechat_api_base")]
+    pub api_base: String,
+    #[serde(with = "humantime_serde", default = "default_wechat_poll_timeout")]
+    pub poll_timeout: Duration,
+    #[serde(with = "humantime_serde", default = "default_wechat_qr_timeout")]
+    pub qr_timeout: Duration,
+    #[serde(default = "default_wechat_max_text_bytes")]
+    pub max_text_bytes: usize,
+    #[serde(default = "default_wechat_max_chunk_bytes")]
+    pub max_chunk_bytes: usize,
+    #[serde(default)]
+    pub binding: Option<WechatBindingSection>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WechatBindingSection {
+    pub session_id: String,
+    pub chat_id: String,
+}
+
 /// One `[[agents]]` entry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -351,6 +381,47 @@ impl GatewayConfig {
             })?;
             if !matches!(url.scheme(), "ws" | "wss") {
                 return Err(ConfigError::invalid("ahp.endpoint must be ws:// or wss://"));
+            }
+        }
+        if let Some(wechat) = &self.wechat {
+            let url = url::Url::parse(&wechat.api_base).map_err(|error| {
+                ConfigError::invalid(format!("wechat.api_base is not a URL: {error}"))
+            })?;
+            let authority = wechat
+                .api_base
+                .strip_prefix("https://")
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_default();
+            if url.scheme() != "https"
+                || url.username() != ""
+                || url.password().is_some()
+                || url.port().is_some()
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || authority.contains(':')
+                || !url.host_str().is_some_and(valid_wechat_host)
+            {
+                return Err(ConfigError::invalid(
+                    "wechat.api_base must be an https ilink*.weixin.qq.com origin",
+                ));
+            }
+            if wechat.max_text_bytes == 0 || wechat.max_text_bytes > 16 * 1024 {
+                return Err(ConfigError::invalid(
+                    "wechat.max_text_bytes must be between 1 and 16384",
+                ));
+            }
+            if wechat.max_chunk_bytes < 4 || wechat.max_chunk_bytes > 3500 {
+                return Err(ConfigError::invalid(
+                    "wechat.max_chunk_bytes must be between 4 and 3500",
+                ));
+            }
+            if let Some(binding) = &wechat.binding
+                && (binding.session_id.trim().is_empty() || binding.chat_id.trim().is_empty())
+            {
+                return Err(ConfigError::invalid(
+                    "wechat.binding.session_id and chat_id must not be empty",
+                ));
             }
         }
 
@@ -486,6 +557,38 @@ fn default_heartbeat() -> Duration {
 
 fn default_ahp_reconnect() -> Duration {
     Duration::from_secs(3)
+}
+
+fn default_wechat_api_base() -> String {
+    "https://ilinkai.weixin.qq.com".to_owned()
+}
+
+fn default_wechat_poll_timeout() -> Duration {
+    Duration::from_secs(40)
+}
+
+fn default_wechat_qr_timeout() -> Duration {
+    Duration::from_secs(300)
+}
+
+fn default_wechat_max_text_bytes() -> usize {
+    16 * 1024
+}
+
+fn default_wechat_max_chunk_bytes() -> usize {
+    3500
+}
+
+fn valid_wechat_host(host: &str) -> bool {
+    let Some(prefix) = host.strip_suffix(".weixin.qq.com") else {
+        return false;
+    };
+    let Some(label) = prefix.strip_prefix("ilink") else {
+        return false;
+    };
+    label.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    })
 }
 
 fn default_true() -> bool {

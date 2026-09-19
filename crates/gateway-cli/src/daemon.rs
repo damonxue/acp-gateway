@@ -17,6 +17,10 @@ use gateway_relay::{RelayClient, RelayStatus, RelayWorker};
 use gateway_remote::{AppState, ComponentHealth, HealthSource, RemoteServer};
 use gateway_store::Database;
 use gateway_tunnel::{TunnelLaunch, TunnelSpec, TunnelStatus, TunnelSupervisor};
+use gateway_wechat::{
+    Binding as WechatBinding, CredentialStore, HttpWeixinApi, Journal, KeychainCredentialStore,
+    SqliteJournal, WechatSupervisor,
+};
 use tracing::{info, warn};
 
 /// How often expired pairing codes and tickets are swept.
@@ -73,6 +77,7 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
 
     let relay = Arc::new(start_relay(&config, &identity, &manager, &machine)?);
     let ahp = Arc::new(start_ahp(&config, &identity, &manager)?);
+    let wechat = Arc::new(start_wechat(&config, &identity, &manager, &database).await?);
 
     let state = AppState::new(
         Arc::clone(&manager),
@@ -113,9 +118,61 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     relay.shutdown();
     tunnel.shutdown();
     ahp.shutdown();
+    wechat.shutdown();
     manager.shutdown_all().await;
     database.close().await;
     result.context("the gateway API stopped unexpectedly")
+}
+
+async fn start_wechat(
+    config: &GatewayConfig,
+    identity: &MachineIdentity,
+    manager: &Arc<SessionManager>,
+    database: &Database,
+) -> Result<WechatSupervisor> {
+    let Some(section) = config.wechat.as_ref().filter(|section| section.enabled) else {
+        return Ok(WechatSupervisor::disabled());
+    };
+    let Some(binding) = section.binding.as_ref() else {
+        warn!("wechat is enabled but no [wechat.binding] is configured; adapter is idle");
+        return Ok(WechatSupervisor::disabled());
+    };
+    let store = KeychainCredentialStore::default();
+    let credentials = match store.load() {
+        Ok(Some(credentials)) => credentials,
+        Ok(None) => {
+            warn!("wechat is enabled but not logged in; run `agent-gateway wechat login`");
+            return Ok(WechatSupervisor::disabled());
+        }
+        Err(error) => {
+            warn!(error = %error, "wechat credential store unavailable; adapter is idle");
+            return Ok(WechatSupervisor::disabled());
+        }
+    };
+    let api = Arc::new(
+        HttpWeixinApi::with_timeout(&credentials.base_url, section.poll_timeout)
+            .context("invalid stored WeChat API base")?,
+    );
+    let journal = Arc::new(SqliteJournal::new(database.pool().clone()));
+    let binding = WechatBinding {
+        binding_id: format!("{}:{}", identity.machine_id(), binding.session_id),
+        session_id: gateway_core::SessionId::new(binding.session_id.clone()),
+        chat_id: binding.chat_id.clone(),
+    };
+    journal
+        .recover_sending()
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?;
+    info!(session_id = %binding.session_id, "starting embedded WeChat adapter");
+    Ok(WechatSupervisor::start_with_limits(
+        Arc::clone(manager),
+        api,
+        journal,
+        credentials,
+        binding,
+        section.max_text_bytes,
+        section.max_chunk_bytes,
+    ))
 }
 
 fn start_ahp(
