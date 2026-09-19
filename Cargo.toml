@@ -26,6 +26,7 @@ gateway-remote = { path = "crates/gateway-remote", version = "0.1.0" }
 gateway-tunnel = { path = "crates/gateway-tunnel", version = "0.1.0" }
 gateway-relay = { path = "crates/gateway-relay", version = "0.1.0" }
 gateway-ahp = { path = "crates/gateway-ahp", version = "0.1.0" }
+ahp-types = "0.9.0"
 
 # --- ACP ---
 # Pinned exactly: the SDK's Rust API changes between majors, while the *wire*

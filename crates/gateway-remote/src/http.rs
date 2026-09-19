@@ -44,6 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/pairing/consume", post(consume_pairing))
         .route("/devices/{device_id}/ws-ticket", post(issue_ticket))
         .route("/remote", get(ws::remote_socket))
+        .route("/ahp", get(ws::ahp_socket))
         // --- loopback only ---
         .route("/machines/current", get(current_machine))
         .route("/agents", get(list_agents))

@@ -13,6 +13,8 @@ workspace = true
 
 [dependencies]
 gateway-core.workspace = true
+ahp-types.workspace = true
+axum.workspace = true
 
 chrono.workspace = true
 futures.workspace = true

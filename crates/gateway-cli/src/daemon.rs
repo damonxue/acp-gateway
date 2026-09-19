@@ -99,7 +99,8 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     info!(
         address = %server.local_addr(),
         agents = config.agents.len(),
-        "gateway ready"
+        ahp = %format!("ws://{}/ahp", server.local_addr()),
+        "gateway ready; AHP Host endpoint available"
     );
     if let Some(endpoint) = tunnel.public_endpoint() {
         info!(%endpoint, "public endpoint");

@@ -10,8 +10,10 @@
 
 #![forbid(unsafe_code)]
 
+mod server;
 mod worker;
 
 pub mod protocol;
 
+pub use server::serve_connection;
 pub use worker::{AhpStatus, AhpSupervisor};

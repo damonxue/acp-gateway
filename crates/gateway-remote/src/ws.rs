@@ -26,6 +26,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Path, Query, State, WebSocketUpgrade};
 use axum::response::Response;
 use futures::{SinkExt, StreamExt};
+use gateway_ahp::serve_connection;
 use gateway_core::error::{GatewayError, Result};
 use gateway_core::ids::SessionId;
 use gateway_core::manager::{CreateSessionSpec, SessionManager};
@@ -82,6 +83,30 @@ pub async fn remote_socket(
     info!(client = %label, "remote client connected");
     Ok(upgrade.on_upgrade(move |socket| async move {
         serve(state, socket, None, label).await;
+    }))
+}
+
+/// `GET /ahp` — official AHP Host WebSocket endpoint.
+///
+/// AHP is a server protocol: clients such as VS Code, AHPX, or a WeChat
+/// adapter connect here. Authentication is enforced by the surrounding
+/// deployment (loopback, reverse proxy, or tunnel); the protocol itself then
+/// starts with the mandatory `initialize` JSON-RPC request.
+pub async fn ahp_socket(
+    access: Access,
+    State(state): State<AppState>,
+    upgrade: WebSocketUpgrade,
+) -> std::result::Result<Response, ApiError> {
+    // AHP has no HTTP-level ticket exchange. Keep the raw host endpoint
+    // loopback-only until a deployment supplies an authenticated reverse
+    // proxy or a transport handshake credential.
+    if !access.is_local() {
+        return Err(ApiError(GatewayError::AuthenticationFailed(
+            "AHP endpoint requires a trusted local or authenticated proxy".into(),
+        )));
+    }
+    Ok(upgrade.on_upgrade(move |socket| async move {
+        serve_connection(socket, Arc::clone(state.manager())).await;
     }))
 }
 

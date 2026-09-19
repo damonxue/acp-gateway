@@ -81,11 +81,7 @@ pub fn fold_transcript(events: &[AgentEvent]) -> Transcript {
 
     for event in events {
         last_seq = last_seq.max(event.seq);
-        let payload = event
-            .payload
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let payload = event.payload.as_object().cloned().unwrap_or_default();
 
         match event.event_type.as_str() {
             "user_message" | "user_message_chunk" => {
@@ -99,20 +95,10 @@ pub fn fold_transcript(events: &[AgentEvent]) -> Transcript {
                 }
             }
             "agent_message" | "agent_message_chunk" => {
-                append_streamed(
-                    &mut items,
-                    "agent",
-                    event,
-                    chunk_text(&payload),
-                );
+                append_streamed(&mut items, "agent", event, chunk_text(&payload));
             }
             "agent_thought_chunk" => {
-                append_streamed(
-                    &mut items,
-                    "thought",
-                    event,
-                    chunk_text(&payload),
-                );
+                append_streamed(&mut items, "thought", event, chunk_text(&payload));
             }
             "tool_call" | "tool_call_update" => {
                 let tool_call_id = payload
@@ -266,11 +252,25 @@ fn append_streamed(items: &mut Vec<TranscriptItem>, kind: &str, event: &AgentEve
 
     let event_id = event.id.to_string();
     let should_merge = match (kind, items.last_mut()) {
-        ("agent", Some(TranscriptItem::Agent { id, text: existing_text, .. })) if id == &event_id => {
+        (
+            "agent",
+            Some(TranscriptItem::Agent {
+                id,
+                text: existing_text,
+                ..
+            }),
+        ) if id == &event_id => {
             existing_text.push_str(&text);
             true
         }
-        ("thought", Some(TranscriptItem::Thought { id, text: existing_text, .. })) if id == &event_id => {
+        (
+            "thought",
+            Some(TranscriptItem::Thought {
+                id,
+                text: existing_text,
+                ..
+            }),
+        ) if id == &event_id => {
             existing_text.push_str(&text);
             true
         }
@@ -296,10 +296,7 @@ fn append_streamed(items: &mut Vec<TranscriptItem>, kind: &str, event: &AgentEve
 }
 
 fn chunk_text(payload: &serde_json::Map<String, serde_json::Value>) -> String {
-    payload
-        .get("content")
-        .map(content_text)
-        .unwrap_or_default()
+    payload.get("content").map(content_text).unwrap_or_default()
 }
 
 fn content_text(value: &serde_json::Value) -> String {
@@ -334,14 +331,16 @@ fn tool_output(payload: &serde_json::Map<String, serde_json::Value>) -> String {
     content
         .iter()
         .map(|entry| match entry {
-            serde_json::Value::Object(object) => match object.get("type").and_then(|value| value.as_str()) {
-                Some("diff") => "[diff]".to_owned(),
-                Some("terminal") => "[terminal]".to_owned(),
-                _ => object
-                    .get("content")
-                    .map(content_text)
-                    .unwrap_or_else(|| content_text(entry)),
-            },
+            serde_json::Value::Object(object) => {
+                match object.get("type").and_then(|value| value.as_str()) {
+                    Some("diff") => "[diff]".to_owned(),
+                    Some("terminal") => "[terminal]".to_owned(),
+                    _ => object
+                        .get("content")
+                        .map(content_text)
+                        .unwrap_or_else(|| content_text(entry)),
+                }
+            }
             _ => content_text(entry),
         })
         .filter(|text| !text.is_empty())
@@ -402,8 +401,16 @@ mod tests {
     fn merges_consecutive_agent_chunks() {
         let transcript = fold_transcript(&[
             event(1, EventType::UserMessage.as_str(), text_chunk("why?")),
-            event(2, EventType::AgentMessageChunk.as_str(), text_chunk("Looking at ")),
-            event(3, EventType::AgentMessageChunk.as_str(), text_chunk("your project.")),
+            event(
+                2,
+                EventType::AgentMessageChunk.as_str(),
+                text_chunk("Looking at "),
+            ),
+            event(
+                3,
+                EventType::AgentMessageChunk.as_str(),
+                text_chunk("your project."),
+            ),
         ]);
         assert_eq!(transcript.items.len(), 2);
         match &transcript.items[1] {
@@ -417,8 +424,16 @@ mod tests {
     #[test]
     fn does_not_merge_chunks_from_different_events() {
         let transcript = fold_transcript(&[
-            event(1, EventType::AgentMessageChunk.as_str(), text_chunk("first")),
-            event(2, EventType::AgentMessageChunk.as_str(), text_chunk("second")),
+            event(
+                1,
+                EventType::AgentMessageChunk.as_str(),
+                text_chunk("first"),
+            ),
+            event(
+                2,
+                EventType::AgentMessageChunk.as_str(),
+                text_chunk("second"),
+            ),
         ]);
         assert_eq!(transcript.items.len(), 2);
         assert!(matches!(

@@ -331,19 +331,20 @@ async fn two_bridge_connections_adopt_independent_sessions() {
     ))
     .await
     .unwrap();
-    right.send(tungstenite::Message::Text(
-        serde_json::to_string(&BridgeMessage::Adopt {
-            agent_id: AgentId::new("zed-gemini"),
-            agent_name: "Gemini via Zed".to_owned(),
-            acp_session_id: "acp-right".to_owned(),
-            workspace: "/tmp/right".into(),
-            cwd: "/tmp/right".into(),
-        })
-        .unwrap()
-        .into(),
-    ))
-    .await
-    .unwrap();
+    right
+        .send(tungstenite::Message::Text(
+            serde_json::to_string(&BridgeMessage::Adopt {
+                agent_id: AgentId::new("zed-gemini"),
+                agent_name: "Gemini via Zed".to_owned(),
+                acp_session_id: "acp-right".to_owned(),
+                workspace: "/tmp/right".into(),
+                cwd: "/tmp/right".into(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
 
     let left_adopted = next_json(&mut left).await;
     let right_adopted = next_json(&mut right).await;
