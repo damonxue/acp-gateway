@@ -90,6 +90,9 @@ pub struct GatewayConfig {
     /// Cloudflare tunnel settings. Absent means "no tunnel".
     #[serde(default)]
     pub tunnel: Option<TunnelSection>,
+    /// Outbound Agent Host Protocol channel. Absent means "no AHP channel".
+    #[serde(default)]
+    pub ahp: Option<AhpSection>,
     /// Agents this gateway may launch. Discovery is never implicit.
     #[serde(default, rename = "agents")]
     pub agents: Vec<AgentSection>,
@@ -206,6 +209,20 @@ pub struct TunnelSection {
     /// Path to the `cloudflared` executable.
     #[serde(default = "default_cloudflared")]
     pub binary: String,
+}
+
+/// `[ahp]` — outbound channel to the AHP/WeChat service.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AhpSection {
+    /// WebSocket endpoint of the AHP channel service.
+    pub endpoint: String,
+    /// Optional bearer token accepted by the channel service.
+    #[serde(default)]
+    pub token: Option<Secret>,
+    /// Delay between reconnect attempts.
+    #[serde(with = "humantime_serde", default = "default_ahp_reconnect")]
+    pub reconnect_interval: Duration,
 }
 
 /// One `[[agents]]` entry.
@@ -325,6 +342,15 @@ impl GatewayConfig {
                 return Err(ConfigError::invalid(
                     "relay.endpoint must be http:// or https://",
                 ));
+            }
+        }
+
+        if let Some(ahp) = &self.ahp {
+            let url = url::Url::parse(&ahp.endpoint).map_err(|error| {
+                ConfigError::invalid(format!("ahp.endpoint is not a URL: {error}"))
+            })?;
+            if !matches!(url.scheme(), "ws" | "wss") {
+                return Err(ConfigError::invalid("ahp.endpoint must be ws:// or wss://"));
             }
         }
 
@@ -458,6 +484,10 @@ fn default_heartbeat() -> Duration {
     Duration::from_secs(30)
 }
 
+fn default_ahp_reconnect() -> Duration {
+    Duration::from_secs(3)
+}
+
 fn default_true() -> bool {
     true
 }
@@ -481,6 +511,23 @@ mod tests {
         assert!(config.bind_addr().ip().is_loopback());
         assert_eq!(config.agent_descriptors().len(), 1);
         assert!(config.tunnel.is_none());
+        assert!(config.ahp.is_none());
+    }
+
+    #[test]
+    fn ahp_requires_a_websocket_endpoint() {
+        let toml = format!("[ahp]\nendpoint = \"https://ahp.example\"\n{MINIMAL}");
+        let error = GatewayConfig::from_toml(&toml).unwrap_err();
+        assert!(error.to_string().contains("ahp.endpoint must be ws://"));
+
+        let toml = format!(
+            "[ahp]\nendpoint = \"wss://ahp.example/channel\"\nreconnect_interval = \"5s\"\n{MINIMAL}"
+        );
+        let config = GatewayConfig::from_toml(&toml).unwrap();
+        assert_eq!(
+            config.ahp.unwrap().reconnect_interval,
+            Duration::from_secs(5)
+        );
     }
 
     #[test]

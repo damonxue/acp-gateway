@@ -2,7 +2,7 @@
 
 **让 Coding Agent 跑在你的电脑上，用手机随时接管。**
 
-[English](README.md) · [架构](docs/architecture.md) · [远程协议](docs/remote-protocol.md) · [安全](docs/security.md) · [IDE 集成](docs/ide-integration.md) · [桌面 App 与网页端方案](docs/ui-implementation-plan.md)
+[English](README.md) · [架构](docs/architecture.md) · [远程协议](docs/remote-protocol.md) · [安全](docs/security.md) · [IDE 集成](docs/ide-integration.md) · [AHP / 微信通道](docs/ahp.md) · [桌面 App 与网页端方案](docs/ui-implementation-plan.md)
 
 Agent Gateway 是运行在开发者本机的守护进程。它用 [Agent Client Protocol（ACP）][acp] 与 Codex、
 Claude Code、OpenCode、Gemini CLI 等 Agent 通信，并通过需要鉴权的 WebSocket 把这些 Session 暴露给
@@ -126,6 +126,9 @@ Agent **必须显式配置**：Gateway 不会自动扫描本机可执行文件�
 | `POST` | `/sessions/{id}/close` | 关闭 Session 并停掉 Agent |
 | `GET` | `/sessions/{id}/events?after_seq=` | 拉取历史事件 |
 | `WS` | `/sessions/{id}/stream?after_seq=` | 回放 + 实时流 |
+| `GET` | `/ahp/status` | 本地 AHP 通道与二维码登录状态 |
+| `POST` | `/ahp/bind` | 本地显式绑定已有 Session |
+| `POST` | `/ahp/unbind` | 解除通道绑定 |
 
 以下接口允许从 tunnel 访问，各自携带凭证：`GET /health`、`POST /pairing/consume`、
 `POST /devices/{id}/ws-ticket`、`WS /remote?ticket=…`。
@@ -154,6 +157,7 @@ crates/
   gateway-remote/   本地 HTTP API + 远程 WebSocket 协议
   gateway-tunnel/   cloudflared 监管器
   gateway-relay/    Relay 客户端、push worker、参考 Relay 服务端
+  gateway-ahp/      出站 Agent Host Protocol / 微信通道
   gateway-cli/      `agent-gateway` 二进制（组装根）
 migrations/         SQLite 表结构
 ```
@@ -178,7 +182,8 @@ Tool Call、权限请求和取消都是在真实的 JSON-RPC stdio 连接上验�
 ## 当前状态
 
 已可用：Agent 启动、prompt/cancel、流式输出、Tool Call、权限请求、事件回放、断线重连、设备配对、
-ticket、本地 API、远程 WebSocket 协议、cloudflared 监管、Relay 客户端与参考 Relay。
+ticket、本地 API、远程 WebSocket 协议、cloudflared 监管、Relay 客户端与参考 Relay，以及支持显式
+Session 绑定和二维码状态的出站 AHP 通道。详见 [AHP / 微信通道](docs/ahp.md)。
 
 部分实现：让 Zed / VS Code 接入同一个 Session 的 IDE Bridge 现在已有
 `agent-gateway acp-bridge` 入口和 daemon `/bridge` socket，但多 Session 编排和更细的仲裁策略

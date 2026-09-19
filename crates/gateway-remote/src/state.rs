@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
+use gateway_ahp::AhpSupervisor;
 use gateway_auth::AuthService;
 use gateway_core::error::{GatewayError, Result};
 use gateway_core::machine::Machine;
@@ -48,6 +49,7 @@ struct Inner {
     machine: RwLock<Machine>,
     trust_loopback: bool,
     health_sources: Vec<Arc<dyn HealthSource>>,
+    ahp: Option<Arc<AhpSupervisor>>,
 }
 
 impl AppState {
@@ -67,6 +69,7 @@ impl AppState {
                 machine: RwLock::new(machine),
                 trust_loopback,
                 health_sources,
+                ahp: None,
             }),
         }
     }
@@ -110,6 +113,21 @@ impl AppState {
     #[must_use]
     pub fn trust_loopback(&self) -> bool {
         self.inner.trust_loopback
+    }
+
+    /// Attach the optional outbound AHP channel after the base state is built.
+    #[must_use]
+    pub fn with_ahp(mut self, ahp: Arc<AhpSupervisor>) -> Self {
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("AHP must be attached before cloning AppState");
+        inner.ahp = Some(ahp);
+        self
+    }
+
+    /// Configured AHP channel, if enabled.
+    #[must_use]
+    pub fn ahp(&self) -> Option<&Arc<AhpSupervisor>> {
+        self.inner.ahp.as_ref()
     }
 }
 

@@ -2210,6 +2210,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-ahp"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "gateway-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "gateway-auth"
 version = "0.1.0"
 dependencies = [
@@ -2265,6 +2281,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures",
+ "gateway-ahp",
  "gateway-auth",
  "gateway-core",
  "serde",

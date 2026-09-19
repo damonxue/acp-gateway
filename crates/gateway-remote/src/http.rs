@@ -55,6 +55,9 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{session_id}/close", post(close_session))
         .route("/sessions/{session_id}/events", get(events))
         .route("/sessions/{session_id}/stream", get(ws::session_socket))
+        .route("/ahp/status", get(ahp_status))
+        .route("/ahp/bind", post(ahp_bind))
+        .route("/ahp/unbind", post(ahp_unbind))
         .route(gateway_core::bridge::BRIDGE_PATH, get(bridge::socket))
         .route("/pairing/begin", post(begin_pairing))
         .route("/devices", get(list_devices))
@@ -89,6 +92,46 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
         },
         components: state.component_health(),
     })
+}
+
+/// `GET /ahp/status` — local desktop control and QR login state.
+async fn ahp_status(access: Access, State(state): State<AppState>) -> ApiResult<serde_json::Value> {
+    access.require_local()?;
+    let status = state.ahp().map(|ahp| ahp.status());
+    Ok(Json(
+        serde_json::json!({ "enabled": status.is_some(), "status": status }),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct AhpBindBody {
+    session_id: String,
+}
+
+/// `POST /ahp/bind` — explicitly bind one existing session to AHP.
+async fn ahp_bind(
+    access: Access,
+    State(state): State<AppState>,
+    Json(body): Json<AhpBindBody>,
+) -> ApiResult<serde_json::Value> {
+    access.require_local()?;
+    let ahp = state
+        .ahp()
+        .ok_or_else(|| GatewayError::invalid_request("AHP is not configured"))?;
+    ahp.bind(SessionId::new(body.session_id))
+        .await
+        .map_err(GatewayError::transport)?;
+    Ok(Json(serde_json::json!({ "bound": true })))
+}
+
+/// `POST /ahp/unbind` — keep the WeChat login while detaching the session.
+async fn ahp_unbind(access: Access, State(state): State<AppState>) -> ApiResult<serde_json::Value> {
+    access.require_local()?;
+    let ahp = state
+        .ahp()
+        .ok_or_else(|| GatewayError::invalid_request("AHP is not configured"))?;
+    ahp.unbind().await.map_err(GatewayError::transport)?;
+    Ok(Json(serde_json::json!({ "unbound": true })))
 }
 
 async fn current_machine(access: Access, State(state): State<AppState>) -> ApiResult<Machine> {

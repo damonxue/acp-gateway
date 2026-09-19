@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gateway_acp::AcpAgentRuntime;
+use gateway_ahp::{AhpStatus, AhpSupervisor};
 use gateway_auth::{AuthConfig, AuthService, MachineIdentity};
 use gateway_config::{GatewayConfig, TunnelMode};
 use gateway_core::agent::AgentRuntime;
@@ -71,6 +72,7 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     ));
 
     let relay = Arc::new(start_relay(&config, &identity, &manager, &machine)?);
+    let ahp = Arc::new(start_ahp(&config, &identity, &manager)?);
 
     let state = AppState::new(
         Arc::clone(&manager),
@@ -80,8 +82,10 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
         vec![
             Arc::new(TunnelHealth(Arc::clone(&tunnel))) as Arc<dyn HealthSource>,
             Arc::new(RelayHealth(Arc::clone(&relay))) as Arc<dyn HealthSource>,
+            Arc::new(AhpHealth(Arc::clone(&ahp))) as Arc<dyn HealthSource>,
         ],
-    );
+    )
+    .with_ahp(Arc::clone(&ahp));
 
     let maintenance = tokio::spawn(maintenance_loop(
         Arc::clone(&auth),
@@ -107,9 +111,29 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     maintenance.abort();
     relay.shutdown();
     tunnel.shutdown();
+    ahp.shutdown();
     manager.shutdown_all().await;
     database.close().await;
     result.context("the gateway API stopped unexpectedly")
+}
+
+fn start_ahp(
+    config: &GatewayConfig,
+    identity: &MachineIdentity,
+    manager: &Arc<SessionManager>,
+) -> Result<AhpSupervisor> {
+    let Some(ahp) = &config.ahp else {
+        return Ok(AhpSupervisor::disabled());
+    };
+    AhpSupervisor::start(
+        ahp.endpoint.clone(),
+        ahp.token.as_ref().map(|token| token.expose().to_owned()),
+        identity.machine_id().clone(),
+        Arc::clone(manager),
+        ahp.reconnect_interval,
+    )
+    .map_err(|error| anyhow::anyhow!(error))
+    .context("cannot start the AHP channel")
 }
 
 fn machine_record(
@@ -265,6 +289,21 @@ impl HealthSource for RelayHealth {
         let status: RelayStatus = self.0.status();
         ComponentHealth {
             name: "relay".to_owned(),
+            state: status.state_name().to_owned(),
+            detail: status.detail(),
+        }
+    }
+}
+
+/// Adapts the outbound AHP channel to the API's health report.
+#[derive(Debug)]
+struct AhpHealth(Arc<AhpSupervisor>);
+
+impl HealthSource for AhpHealth {
+    fn health(&self) -> ComponentHealth {
+        let status: AhpStatus = self.0.status();
+        ComponentHealth {
+            name: "ahp".to_owned(),
             state: status.state_name().to_owned(),
             detail: status.detail(),
         }

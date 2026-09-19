@@ -591,6 +591,20 @@ impl SessionManager {
     ///
     /// 提交一个 prompt 回合。
     pub async fn send_prompt(&self, id: &SessionId, blocks: Vec<PromptBlock>) -> Result<()> {
+        self.send_prompt_from(id, blocks, None).await
+    }
+
+    /// Submit a prompt and record its source in the user-message echo.
+    ///
+    /// A source is intentionally optional so existing API clients keep the
+    /// exact historical payload. Channel adapters can mark their own echo,
+    /// which prevents forwarding an inbound message back to the same channel.
+    pub async fn send_prompt_from(
+        &self,
+        id: &SessionId,
+        blocks: Vec<PromptBlock>,
+        source: Option<&str>,
+    ) -> Result<()> {
         if blocks.is_empty() {
             return Err(GatewayError::invalid_request("prompt must not be empty"));
         }
@@ -610,14 +624,17 @@ impl SessionManager {
         //
         // 先记录回显，让所有观察者（包括发送 prompt 的那个客户端）都在同一个 `seq`
         // 上看到回合开始。
-        self.append_event(
-            id,
-            EventDraft::from_value(
-                EventType::UserMessage,
-                serde_json::json!({ "content": blocks }),
-            ),
-        )
-        .await?;
+        let mut payload = serde_json::json!({ "content": blocks });
+        if let Some(source) = source
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert(
+                "source".to_owned(),
+                serde_json::Value::String(source.to_owned()),
+            );
+        }
+        self.append_event(id, EventDraft::from_value(EventType::UserMessage, payload))
+            .await?;
 
         handle.submit_prompt(blocks).await
     }
@@ -1129,5 +1146,34 @@ mod tests {
             RecordingRuntime::prompts(&runtime),
             vec!["check redis".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn sourced_prompts_mark_the_echo_for_channel_adapters() {
+        let (manager, _) = memory_manager().await;
+        let session = manager
+            .create_session(CreateSessionSpec {
+                agent_id: AgentId::new("mock"),
+                workspace: PathBuf::from("/tmp/project"),
+                cwd: None,
+                additional_directories: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        manager
+            .send_prompt_from(
+                &session.id,
+                vec![PromptBlock::text("from WeChat")],
+                Some("ahp"),
+            )
+            .await
+            .unwrap();
+        let events = manager.replay_events(&session.id, 0, None).await.unwrap();
+        let user_message = events
+            .iter()
+            .find(|event| event.event_type == EventType::UserMessage.as_str())
+            .unwrap();
+        assert_eq!(user_message.payload["source"], "ahp");
     }
 }

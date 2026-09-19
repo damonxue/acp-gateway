@@ -26,6 +26,14 @@ trust_loopback = true
 # token = "<relay token>"
 # heartbeat_interval = "30s"
 
+# Outbound Agent Host Protocol channel. This replaces the public tunnel/relay
+# path for the WeChat host: the gateway connects out, then the channel service
+# supplies QR login state and delivers private messages.
+# [ahp]
+# endpoint = "wss://ahp.example.com/channel"
+# token = "<channel token>"
+# reconnect_interval = "3s"
+
 # [tunnel]
 # mode = "token"                      # or "config"
 # token = "<cloudflare tunnel token>" # never logged / 永不写入日志

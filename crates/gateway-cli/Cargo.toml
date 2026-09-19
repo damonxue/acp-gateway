@@ -21,6 +21,7 @@ name = "agent-gateway"
 path = "src/main.rs"
 
 [dependencies]
+gateway-ahp.workspace = true
 gateway-acp.workspace = true
 gateway-auth.workspace = true
 gateway-config.workspace = true

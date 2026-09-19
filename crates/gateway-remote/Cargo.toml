@@ -19,6 +19,7 @@ workspace = true
 web-ui = ["dep:rust-embed"]
 
 [dependencies]
+gateway-ahp.workspace = true
 gateway-auth.workspace = true
 gateway-core.workspace = true
 

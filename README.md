@@ -2,7 +2,7 @@
 
 **Run coding agents on your computer. Drive them from your phone.**
 
-[中文文档](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Remote protocol](docs/remote-protocol.md) · [Security](docs/security.md) · [IDE integration](docs/ide-integration.md) · [Desktop & web plan](docs/ui-implementation-plan.md)
+[中文文档](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Remote protocol](docs/remote-protocol.md) · [Security](docs/security.md) · [IDE integration](docs/ide-integration.md) · [AHP / WeChat](docs/ahp.md) · [Desktop & web plan](docs/ui-implementation-plan.md)
 
 Agent Gateway is a local daemon that speaks the [Agent Client Protocol (ACP)][acp] to
 coding agents — Codex, Claude Code, OpenCode, Gemini CLI — and exposes their sessions to
@@ -162,6 +162,9 @@ Loopback only, for the CLI, scripts and IDE plugins:
 | `POST` | `/sessions/{id}/close` | close the session, stop the agent |
 | `GET` | `/sessions/{id}/events?after_seq=` | replay history |
 | `WS` | `/sessions/{id}/stream?after_seq=` | replay + live stream |
+| `GET` | `/ahp/status` | local AHP channel and QR login state |
+| `POST` | `/ahp/bind` | local explicit binding of an existing session |
+| `POST` | `/ahp/unbind` | local channel unbinding |
 
 Reachable from anywhere the gateway is (i.e. through the tunnel), each with its own
 credential: `GET /health`, `POST /pairing/consume`, `POST /devices/{id}/ws-ticket`,
@@ -194,6 +197,7 @@ crates/
   gateway-remote/   local HTTP API + remote WebSocket protocol + /app hosting
   gateway-tunnel/   cloudflared supervisor
   gateway-relay/    relay client, push worker, reference relay server
+  gateway-ahp/      outbound Agent Host Protocol / WeChat channel
   gateway-cli/      the `agent-gateway` binary (composition root)
 app/                macOS desktop app (GPUI) — its own cargo workspace
 web/                phone and browser client (TypeScript + Preact)
@@ -225,7 +229,8 @@ See [docs/development.md](docs/development.md).
 
 Working today: agent launch, prompt/cancel, streaming, tool calls, permissions, event
 replay, reconnect, device pairing, tickets, the local API, the remote WebSocket protocol,
-the cloudflared supervisor, the relay client and a reference relay.
+the cloudflared supervisor, the relay client, a reference relay, and the outbound AHP
+channel with explicit session binding and QR status. See [docs/ahp.md](docs/ahp.md).
 
 Partially implemented: the IDE bridge that lets Zed/VS Code attach to a gateway session
 now has an `agent-gateway acp-bridge` entrypoint and a daemon `/bridge` socket, but
