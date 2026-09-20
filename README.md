@@ -2,7 +2,7 @@
 
 **Run coding agents on your computer. Drive them from your phone.**
 
-[中文文档](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Remote protocol](docs/remote-protocol.md) · [Security](docs/security.md) · [IDE integration](docs/ide-integration.md) · [AHP / WeChat](docs/ahp.md) · [Desktop & web plan](docs/ui-implementation-plan.md)
+[中文文档](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Remote protocol](docs/remote-protocol.md) · [Security](docs/security.md) · [IDE integration](docs/ide-integration.md) · [Chat adapters](docs/chat-adapters.md)
 
 Agent Gateway is a local daemon that speaks the [Agent Client Protocol (ACP)][acp] to
 coding agents — Codex, Claude Code, OpenCode, Gemini CLI — and exposes their sessions to
@@ -80,6 +80,8 @@ Then:
 agent-gateway pair          # prints a QR code and a 6-digit pairing code
 agent-gateway devices list
 agent-gateway devices revoke device_…
+agent-gateway zed config     # print Zed's agent_servers JSON
+agent-gateway zed copy       # copy it with pbcopy/wl-copy/xclip
 ```
 
 Open `http://127.0.0.1:48100/app` on the same machine, or
@@ -91,15 +93,25 @@ account, no third party. See [docs/remote-protocol.md](docs/remote-protocol.md).
 
 ```bash
 cargo dmg          # "Agent Gateway.app" + a .dmg, web client included
-cargo dmg-cli      # same, without the GPUI app (no Xcode needed)
-cargo app          # just build the desktop app
+cargo dmg-cli      # same, without the menu bar helper (no macOS SDK needed)
+cargo app          # just build the menu bar helper
 ```
 
-`cargo dmg` needs Xcode with the Metal toolchain
-(`xcodebuild -downloadComponent MetalToolchain`). The resulting dmg is ad-hoc signed, so on
-another Mac: `xattr -dr com.apple.quarantine "/Applications/Agent Gateway.app"`. Set
+`cargo dmg` needs a macOS SDK to build the AppKit helper. The resulting dmg is
+ad-hoc signed, so on another Mac: `xattr -dr com.apple.quarantine "/Applications/Agent Gateway.app"`. Set
 `MACOS_SIGNING_KEY` (and `APPLE_NOTARIZATION_*`) and pass `--sign` for a distributable
 build.
+
+The optional `app/` target is a small macOS menu bar companion. It has no large
+session window: it starts the bundled CLI daemon when the status item opens, and
+**Copy Zed agent_servers** calls the same Rust generator as `agent-gateway zed copy`.
+**Choose gateway project…** is available for development checkouts; select the
+directory containing the workspace `Cargo.toml`, then build `gateway-cli`. The
+selection is stored under `~/Library/Application Support/Agent Gateway/`.
+
+The App bundle contains two CLI binaries: `agent-gateway` is the bundle-local
+wrapper that Zed invokes, and `agent-gateway-daemon` is the web-enabled daemon
+started by the status item. Both link the same `gateway-cli` Rust library.
 
 ### Configuration
 
@@ -130,6 +142,31 @@ name = "Codex"
 command = "npx"
 args = ["-y", "@agentclientprotocol/codex-acp@latest"]
 ```
+
+The Zed helper emits one entry per configured agent. Its shape is:
+
+```json
+{
+  "agent_servers": {
+    "Codex via Agent Gateway": {
+      "default_config_options": { "model": "gpt-6-astra" },
+      "type": "custom",
+      "command": "/path/to/agent-gateway",
+      "args": ["acp-bridge", "--agent", "codex"],
+      "env": { "AGENT_GATEWAY_CONFIG": "/Users/me/.agent-gateway/config.toml" }
+    }
+  }
+}
+```
+
+Paste it under `agent_servers` in Zed's `settings.json`, or use the menu bar
+action/`zed copy` command.
+
+The command path is discovered in this order: `AGENT_GATEWAY_BIN`, the CLI next
+to the app bundle, a selected Cargo project (`AGENT_GATEWAY_PROJECT`), the
+workspace `target/debug` or `target/release` binary, then `PATH`.
+Inside the installed App bundle the first matching sibling is always the
+bundle-local `agent-gateway` wrapper.
 
 Agents are **always explicit**. The gateway never scans your machine for executables.
 
@@ -199,7 +236,10 @@ crates/
   gateway-relay/    relay client, push worker, reference relay server
   gateway-ahp/      outbound Agent Host Protocol / WeChat channel
   gateway-cli/      the `agent-gateway` binary (composition root)
-app/                macOS desktop app (GPUI) — its own cargo workspace
+  gateway-wechat/   embedded WeChat Bot adapter
+  gateway-lark/     Lark/Feishu signed webhook and message API adapter
+  gateway-telegram/ Telegram Bot API long-polling adapter
+app/                macOS menu bar companion — its own cargo workspace
 web/                phone and browser client (TypeScript + Preact)
 xtask/              build tasks behind `cargo dmg`
 script/             bundle-mac.sh: .app + .dmg
@@ -230,7 +270,9 @@ See [docs/development.md](docs/development.md).
 Working today: agent launch, prompt/cancel, streaming, tool calls, permissions, event
 replay, reconnect, device pairing, tickets, the local API, the remote WebSocket protocol,
 the cloudflared supervisor, the relay client, a reference relay, and the outbound AHP
-channel with explicit session binding and QR status. See [docs/ahp.md](docs/ahp.md).
+channel with explicit session binding and QR status. Telegram long polling and Lark signed
+webhook adapters are available with explicit chat/session bindings. See
+[docs/ahp.md](docs/ahp.md) and [docs/chat-adapters.md](docs/chat-adapters.md).
 
 Partially implemented: the IDE bridge that lets Zed/VS Code attach to a gateway session
 now has an `agent-gateway acp-bridge` entrypoint and a daemon `/bridge` socket, but

@@ -50,6 +50,31 @@ api_base = "https://ilinkai.weixin.qq.com"
 # session_id = "sess_..."
 # chat_id = "ahp-chat:/..."
 
+# Lark/Feishu event callback adapter. Put the callback URL behind an HTTPS
+# reverse proxy and configure that URL in the Lark developer console.
+# [lark]
+# enabled = true
+# app_id = "cli_..."
+# app_secret = "<secret>"
+# api_base = "https://open.feishu.cn"
+# webhook_bind = "127.0.0.1:48101"
+# verification_token = "<verification token>"
+# encrypt_key = "<encrypt key>"
+# [lark.binding]
+# session_id = "sess_..."
+# chat_id = "oc_..."
+
+# Telegram uses Bot API long polling, so no public callback is required.
+# [telegram]
+# enabled = true
+# bot_token = "<bot token>"
+# api_base = "https://api.telegram.org"
+# poll_timeout = "30s"
+# max_chunk_bytes = 4096
+# [telegram.binding]
+# session_id = "sess_..."
+# chat_id = "123456789"
+
 # [tunnel]
 # mode = "token"                      # or "config"
 # token = "<cloudflare tunnel token>" # never logged / 永不写入日志

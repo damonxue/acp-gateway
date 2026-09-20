@@ -386,6 +386,10 @@ mod tests {
         }
     }
 
+    fn test_gateway_binary() -> &'static Path {
+        Path::new("/tmp/agent-gateway-test")
+    }
+
     fn read(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
     }
@@ -398,7 +402,7 @@ mod tests {
           "agent_servers": {
             "codex via Gateway": {
               "type": "custom",
-              "command": "/bin/agent-gateway",
+              "command": "/tmp/agent-gateway-test",
               "args": ["acp-bridge", "--agent", "codex"],
               "env": {}
             }
@@ -415,7 +419,7 @@ mod tests {
     fn converts_agent_server_spec_to_cst() {
         let spec = ZedAgentServerSpec {
             key: "codex".into(),
-            command: "/bin/agent-gateway".into(),
+            command: "/tmp/agent-gateway-test".into(),
             args: vec!["acp-bridge".into(), "--agent".into(), "codex".into()],
             env: BTreeMap::new(),
         };
@@ -438,7 +442,7 @@ mod tests {
         fs::write(manager.settings_path(), original).unwrap();
 
         manager
-            .enable_for_agents(&[agent_descriptor()], Path::new("/bin/agent-gateway"))
+            .enable_for_agents(&[agent_descriptor()], test_gateway_binary())
             .unwrap();
 
         let enabled = read(manager.settings_path());
@@ -477,10 +481,10 @@ mod tests {
         fs::write(manager.settings_path(), original).unwrap();
 
         manager
-            .enable_for_agents(&[agent_descriptor()], Path::new("/bin/agent-gateway"))
+            .enable_for_agents(&[agent_descriptor()], test_gateway_binary())
             .unwrap();
         let enabled = read(manager.settings_path());
-        assert!(enabled.contains("\"/bin/agent-gateway\""));
+        assert!(enabled.contains("\"/tmp/agent-gateway-test\""));
         assert!(enabled.contains("\"acp-bridge\""));
 
         manager.disable().unwrap();
@@ -510,7 +514,7 @@ mod tests {
         fs::write(manager.settings_path(), original).unwrap();
 
         manager
-            .enable_for_agents(&[agent_descriptor()], Path::new("/bin/agent-gateway"))
+            .enable_for_agents(&[agent_descriptor()], test_gateway_binary())
             .unwrap();
         manager.restore_backup().unwrap();
 

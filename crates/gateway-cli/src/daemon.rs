@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::adapters::AdapterRuntime;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gateway_acp::AcpAgentRuntime;
@@ -79,6 +80,7 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     let relay = Arc::new(start_relay(&config, &identity, &manager, &machine)?);
     let ahp = Arc::new(start_ahp(&config, &identity, &manager)?);
     let wechat = Arc::new(start_wechat(&config, &identity, &manager, &database).await?);
+    let mut adapters = AdapterRuntime::start(&config, Arc::clone(&manager))?;
     let wechat_auto_bind = wechat
         .is_enabled()
         .then(|| tokio::spawn(auto_bind_wechat(Arc::clone(&manager), Arc::clone(&wechat))));
@@ -123,6 +125,7 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     tunnel.shutdown();
     ahp.shutdown();
     wechat.shutdown();
+    adapters.shutdown();
     if let Some(task) = wechat_auto_bind {
         task.abort();
     }

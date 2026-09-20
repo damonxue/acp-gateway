@@ -11,6 +11,9 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [features]
 # Serve the built web client at `/app`. Requires `cd web && pnpm build` first;
 # `script/bundle-mac.sh` does both.
@@ -31,8 +34,12 @@ gateway-remote.workspace = true
 gateway-store.workspace = true
 gateway-tunnel.workspace = true
 gateway-wechat.workspace = true
+gateway-lark.workspace = true
+gateway-telegram.workspace = true
 
 anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
 futures.workspace = true

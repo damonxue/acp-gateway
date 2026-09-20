@@ -96,6 +96,12 @@ pub struct GatewayConfig {
     /// Embedded WeChat Bot adapter. Credentials are kept in the OS secret store.
     #[serde(default)]
     pub wechat: Option<WechatSection>,
+    /// Lark/Feishu bot adapter.
+    #[serde(default)]
+    pub lark: Option<LarkSection>,
+    /// Telegram Bot API adapter.
+    #[serde(default)]
+    pub telegram: Option<TelegramSection>,
     /// Agents this gateway may launch. Discovery is never implicit.
     #[serde(default, rename = "agents")]
     pub agents: Vec<AgentSection>,
@@ -252,6 +258,53 @@ pub struct WechatSection {
 #[serde(deny_unknown_fields)]
 pub struct WechatBindingSection {
     pub session_id: String,
+    pub chat_id: String,
+}
+
+/// `[lark]` — Lark/Feishu webhook bot adapter.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LarkSection {
+    #[serde(default)]
+    pub enabled: bool,
+    pub app_id: String,
+    pub app_secret: Secret,
+    #[serde(default = "default_lark_api_base")]
+    pub api_base: String,
+    /// Local callback address. Expose it through a reverse proxy when Lark
+    /// cannot reach the machine directly.
+    #[serde(default = "default_lark_webhook_bind")]
+    pub webhook_bind: String,
+    #[serde(default)]
+    pub verification_token: Option<Secret>,
+    #[serde(default)]
+    pub encrypt_key: Option<Secret>,
+    #[serde(default)]
+    pub binding: Option<ChatBindingSection>,
+}
+
+/// `[telegram]` — Telegram long-polling bot adapter.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelegramSection {
+    #[serde(default)]
+    pub enabled: bool,
+    pub bot_token: Secret,
+    #[serde(default = "default_telegram_api_base")]
+    pub api_base: String,
+    #[serde(with = "humantime_serde", default = "default_telegram_poll_timeout")]
+    pub poll_timeout: Duration,
+    #[serde(default = "default_telegram_max_chunk_bytes")]
+    pub max_chunk_bytes: usize,
+    #[serde(default)]
+    pub binding: Option<ChatBindingSection>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatBindingSection {
+    pub session_id: String,
+    /// Telegram chat id or Lark chat_id.
     pub chat_id: String,
 }
 
@@ -425,6 +478,37 @@ impl GatewayConfig {
             }
         }
 
+        if let Some(lark) = &self.lark {
+            if lark.app_id.trim().is_empty() || lark.app_secret.is_empty() {
+                return Err(ConfigError::invalid(
+                    "lark.app_id and lark.app_secret must not be empty",
+                ));
+            }
+            validate_https_origin("lark.api_base", &lark.api_base)?;
+            if lark.webhook_bind.parse::<SocketAddr>().is_err() {
+                return Err(ConfigError::invalid(
+                    "lark.webhook_bind must be a socket address",
+                ));
+            }
+            if let Some(binding) = &lark.binding {
+                validate_chat_binding("lark.binding", binding)?;
+            }
+        }
+        if let Some(telegram) = &self.telegram {
+            if telegram.bot_token.is_empty() {
+                return Err(ConfigError::invalid("telegram.bot_token must not be empty"));
+            }
+            validate_https_origin("telegram.api_base", &telegram.api_base)?;
+            if telegram.max_chunk_bytes < 4 || telegram.max_chunk_bytes > 4096 {
+                return Err(ConfigError::invalid(
+                    "telegram.max_chunk_bytes must be between 4 and 4096",
+                ));
+            }
+            if let Some(binding) = &telegram.binding {
+                validate_chat_binding("telegram.binding", binding)?;
+            }
+        }
+
         if let Some(tunnel) = &mut self.tunnel {
             match tunnel.mode {
                 TunnelMode::Token => {
@@ -579,6 +663,48 @@ fn default_wechat_max_chunk_bytes() -> usize {
     3500
 }
 
+fn default_lark_api_base() -> String {
+    "https://open.feishu.cn".to_owned()
+}
+fn default_lark_webhook_bind() -> String {
+    "127.0.0.1:48101".to_owned()
+}
+fn default_telegram_api_base() -> String {
+    "https://api.telegram.org".to_owned()
+}
+fn default_telegram_poll_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+fn default_telegram_max_chunk_bytes() -> usize {
+    4096
+}
+
+fn validate_https_origin(name: &str, value: &str) -> Result<(), ConfigError> {
+    let url = url::Url::parse(value)
+        .map_err(|error| ConfigError::invalid(format!("{name} is not a URL: {error}")))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || url.username() != ""
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConfigError::invalid(format!(
+            "{name} must be an https origin"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_chat_binding(name: &str, binding: &ChatBindingSection) -> Result<(), ConfigError> {
+    if binding.session_id.trim().is_empty() || binding.chat_id.trim().is_empty() {
+        return Err(ConfigError::invalid(format!(
+            "{name}.session_id and chat_id must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 fn valid_wechat_host(host: &str) -> bool {
     let Some(prefix) = host.strip_suffix(".weixin.qq.com") else {
         return false;
@@ -685,5 +811,15 @@ mod tests {
             GatewayConfig::from_toml(&toml),
             Err(ConfigError::Parse { .. })
         ));
+    }
+
+    #[test]
+    fn chat_adapters_validate_explicit_bindings() {
+        let toml = format!(
+            "[telegram]\nenabled = true\nbot_token = \"token\"\n[telegram.binding]\nsession_id = \"sess_1\"\nchat_id = \"42\"\n[lark]\nenabled = true\napp_id = \"cli_app\"\napp_secret = \"secret\"\n[lark.binding]\nsession_id = \"sess_1\"\nchat_id = \"oc_chat\"\n{MINIMAL}"
+        );
+        let config = GatewayConfig::from_toml(&toml).unwrap();
+        assert!(config.telegram.is_some());
+        assert!(config.lark.is_some());
     }
 }

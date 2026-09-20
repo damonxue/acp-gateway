@@ -8,7 +8,7 @@
 #
 # Usage:
 #   script/bundle-mac.sh                 # web client + CLI + GUI, ad-hoc signed
-#   script/bundle-mac.sh --no-app        # skip the GPUI app (no Xcode needed)
+#   script/bundle-mac.sh --no-app        # skip the menu bar app (no Xcode needed)
 #   script/bundle-mac.sh --no-web        # skip the web client (no Node needed)
 #   script/bundle-mac.sh --sign          # sign with MACOS_SIGNING_KEY, notarise
 #                                        # when APPLE_NOTARIZATION_* are set
@@ -47,31 +47,16 @@ dmg="target/Agent-Gateway-${version}-${arch}.dmg"
 
 echo "==> Agent Gateway ${version} (${arch})"
 
-# --- 1. the web client -------------------------------------------------------
-cargo_features=()
-if [ "$build_web" = true ]; then
-  if ! command -v pnpm > /dev/null; then
-    echo "pnpm not found; install it or pass --no-web" >&2
-    exit 1
-  fi
-  echo "==> building the web client"
-  (cd web && pnpm install --frozen-lockfile && pnpm build)
-  cargo_features=(--features web-ui)
-else
-  echo "==> skipping the web client (/app will explain how to build it)"
-fi
-
 # --- 2. the daemon and CLI ---------------------------------------------------
 echo "==> building agent-gateway"
-cargo build --release -p gateway-cli "${cargo_features[@]}"
+cargo build --release -p gateway-cli 
 
 # --- 3. the GUI --------------------------------------------------------------
 if [ "$build_app" = true ]; then
   if ! xcrun -f metal > /dev/null 2>&1; then
     cat >&2 <<'METAL'
-The Metal compiler is missing, so GPUI cannot build. Either:
-  xcodebuild -downloadComponent MetalToolchain
-  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+The macOS SDK is missing, so the menu bar helper cannot build. Either:
+  xcode-select --install
 or run this script with --no-app to package just the daemon and CLI.
 METAL
     exit 1
@@ -88,18 +73,20 @@ mkdir -p "${app}/Contents/MacOS" "${app}/Contents/Resources"
 cp app/resources/Info.plist "${app}/Contents/Info.plist"
 printf 'APPL????' > "${app}/Contents/PkgInfo"
 
-# The daemon ships inside the bundle so the app can start it and users get the
-# CLI without a second install.
-cp target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway"
+# The web-enabled daemon and the bundle-local wrapper ship separately. Zed
+# points at the wrapper, while the status item starts the daemon.
+cp target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway-daemon"
 if [ "$build_app" = true ]; then
   cp app/target/release/agent-gateway-app "${app}/Contents/MacOS/agent-gateway-app"
+  cp app/target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway"
 else
+  cp target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway"
   # Without the GUI the bundle still has to have its declared executable, so
   # point it at a stub that opens the web client instead.
   cat > "${app}/Contents/MacOS/agent-gateway-app" <<'STUB'
 #!/bin/sh
 here="$(cd "$(dirname "$0")" && pwd)"
-"${here}/agent-gateway" run &
+"${here}/agent-gateway-daemon" run &
 sleep 1
 open "http://127.0.0.1:48100/app"
 STUB
@@ -129,9 +116,20 @@ if [ "$sign" = true ]; then
 else
   echo "==> ad-hoc signing (unsigned builds need: xattr -dr com.apple.quarantine)"
 fi
-codesign --force --timestamp=none --options runtime \
-  --sign "$identity" "${app}/Contents/MacOS/agent-gateway" > /dev/null 2>&1 ||
-  codesign --force --sign "$identity" "${app}/Contents/MacOS/agent-gateway"
+for binary in agent-gateway-daemon; do
+  codesign --force --timestamp=none --options runtime \
+    --sign "$identity" "${app}/Contents/MacOS/${binary}" > /dev/null 2>&1 ||
+    codesign --force --sign "$identity" "${app}/Contents/MacOS/${binary}"
+done
+if [ "$build_app" = true ]; then
+  codesign --force --timestamp=none --options runtime \
+    --sign "$identity" "${app}/Contents/MacOS/agent-gateway" > /dev/null 2>&1 ||
+    codesign --force --sign "$identity" "${app}/Contents/MacOS/agent-gateway"
+else
+  codesign --force --timestamp=none --options runtime \
+    --sign "$identity" "${app}/Contents/MacOS/agent-gateway" > /dev/null 2>&1 ||
+    codesign --force --sign "$identity" "${app}/Contents/MacOS/agent-gateway"
+fi
 codesign --force --deep --options runtime \
   --sign "$identity" "$app" > /dev/null 2>&1 ||
   codesign --force --deep --sign "$identity" "$app"

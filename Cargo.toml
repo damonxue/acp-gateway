@@ -27,6 +27,8 @@ gateway-tunnel = { path = "crates/gateway-tunnel", version = "0.1.0" }
 gateway-relay = { path = "crates/gateway-relay", version = "0.1.0" }
 gateway-ahp = { path = "crates/gateway-ahp", version = "0.1.0" }
 gateway-wechat = { path = "crates/gateway-wechat", version = "0.1.0" }
+gateway-lark = { path = "crates/gateway-lark", version = "0.1.0" }
+gateway-telegram = { path = "crates/gateway-telegram", version = "0.1.0" }
 ahp-types = "0.9.0"
 
 # --- ACP ---

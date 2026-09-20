@@ -2,7 +2,7 @@
 
 **让 Coding Agent 跑在你的电脑上，用手机随时接管。**
 
-[English](README.md) · [架构](docs/architecture.md) · [远程协议](docs/remote-protocol.md) · [安全](docs/security.md) · [IDE 集成](docs/ide-integration.md) · [AHP / 微信通道](docs/ahp.md) · [桌面 App 与网页端方案](docs/ui-implementation-plan.md)
+[English](README.md) · [架构](docs/architecture.md) · [远程协议](docs/remote-protocol.md) · [安全](docs/security.md) · [IDE 集成](docs/ide-integration.md) · [聊天适配器](docs/chat-adapters.md)
 
 Agent Gateway 是运行在开发者本机的守护进程。它用 [Agent Client Protocol（ACP）][acp] 与 Codex、
 Claude Code、OpenCode、Gemini CLI 等 Agent 通信，并通过需要鉴权的 WebSocket 把这些 Session 暴露给
@@ -64,6 +64,8 @@ agent-gateway sessions watch $SID                     # 实时跟随事件流
 agent-gateway pair          # 打印二维码和 6 位配对码
 agent-gateway devices list
 agent-gateway devices revoke device_…
+agent-gateway zed config     # 输出 Zed 的 agent_servers JSON
+agent-gateway zed copy       # 复制到剪贴板
 ```
 
 ### 配置
@@ -97,6 +99,38 @@ args = ["-y", "@agentclientprotocol/codex-acp@latest"]
 ```
 
 Agent **必须显式配置**：Gateway 不会自动扫描本机可执行文件。
+
+macOS 的 `app/` 是一个小型状态栏 companion。状态栏启动时会自动启动同目录里的 CLI 守护进程，
+点击 **Copy Zed agent_servers** 复制 Zed 配置；配置生成和校验都复用 Rust CLI，不会再维护一套
+独立的 GPUI 页面。开发源码时可以点击 **Choose gateway project…** 选择包含 workspace
+`Cargo.toml` 的目录；选择会保存到 `~/Library/Application Support/Agent Gateway/`。
+
+App bundle 内有两个 CLI：`agent-gateway` 是 Zed 调用的 bundle wrapper，
+`agent-gateway-daemon` 是状态栏启动的 web-enabled daemon；二者都直接链接同一个
+`gateway-cli` Rust library。
+
+每个 `[[agents]]` 都可以生成如下 Zed 配置：
+
+```json
+{
+  "agent_servers": {
+    "Codex via Agent Gateway": {
+      "default_config_options": { "model": "gpt-6-astra" },
+      "type": "custom",
+      "command": "/path/to/agent-gateway",
+      "args": ["acp-bridge", "--agent", "codex"],
+      "env": { "AGENT_GATEWAY_CONFIG": "/Users/me/.agent-gateway/config.toml" }
+    }
+  }
+}
+```
+
+也可以直接执行 `agent-gateway zed copy`，或将 `agent-gateway zed config` 的结果粘贴到
+Zed `settings.json` 的 `agent_servers` 下。
+
+CLI 路径按以下顺序自动发现：`AGENT_GATEWAY_BIN`、App bundle 中的同目录 CLI、选择的 Cargo
+项目（`AGENT_GATEWAY_PROJECT`）、workspace 的 `target/debug` 或 `target/release`，最后是 `PATH`。
+安装后的 App 会优先使用同目录的 `agent-gateway` wrapper，因此 Zed 不依赖源码 checkout。
 
 ## 两套协议
 
@@ -158,7 +192,11 @@ crates/
   gateway-tunnel/   cloudflared 监管器
   gateway-relay/    Relay 客户端、push worker、参考 Relay 服务端
   gateway-ahp/      出站 Agent Host Protocol / 微信通道
+  gateway-wechat/   内嵌微信 Bot 适配器
+  gateway-lark/     Lark/飞书签名回调与消息 API 适配器
+  gateway-telegram/ Telegram Bot API 长轮询适配器
   gateway-cli/      `agent-gateway` 二进制（组装根）
+app/                macOS 状态栏 companion（独立 cargo workspace）
 migrations/         SQLite 表结构
 ```
 
