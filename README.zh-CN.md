@@ -1,24 +1,28 @@
 # Agent Gateway
 
-**让 Coding Agent 跑在你的电脑上，用手机随时接管。**
+**让 Coding Agent 跑在你的电脑上，用 AHP 协调多个客户端。**
 
 [English](README.md) · [架构](docs/architecture.md) · [远程协议](docs/remote-protocol.md) · [安全](docs/security.md) · [IDE 集成](docs/ide-integration.md) · [聊天适配器](docs/chat-adapters.md)
 
 Agent Gateway 是运行在开发者本机的守护进程。它用 [Agent Client Protocol（ACP）][acp] 与 Codex、
-Claude Code、OpenCode、Gemini CLI 等 Agent 通信，并通过需要鉴权的 WebSocket 把这些 Session 暴露给
-手机、浏览器等远程客户端。合上笔记本、拿起手机，Session 仍在继续：相同的输出、相同的 Tool Call、
-相同的待确认权限请求。
+Claude Code、OpenCode、Gemini CLI 等 Agent 通信，并负责持久化 Session。多客户端的主要控制路径是
+Agent Host Protocol（AHP）：多个 AHP client 可以同时连接 Gateway，订阅同一个 Session，接收同一份
+事件流，并安全地竞争处理权限请求。
 
-它**不是**新的 Agent Runtime，而是：ACP Proxy + Session Manager + Remote Transport。
+手机/浏览器的 `/remote` 是另一条较早的传输路径，依赖 relay 和 tunnel。目前 relay、tunnel 以及这条
+远程路径都不稳定，应当按实验功能使用。
+
+它**不是**新的 Agent Runtime，而是：ACP Proxy + AHP Host + Session Manager，以及可选的 Remote Transport。
 
 ```text
-           手机 / 浏览器
-                 │  wss + 一次性 ticket
+        多个 AHP client
+      Zed · VS Code · AHPX · 各类 adapter
+                 │  AHP WebSocket
                  ▼
         ┌────────────────────────────────────┐
         │            Agent Gateway              │
-        │  ACP 代理 · Session · 事件日志          │
-        │  设备配对 · Ticket · Tunnel             │
+        │  AHP Host · ACP proxy · Session       │
+        │  事件日志 · channel/session 绑定       │
         └──────────────────┬─────────────────┘
                          │ ACP（stdio 上的 JSON-RPC 2.0）
                          ▼
@@ -68,13 +72,18 @@ agent-gateway zed config     # 输出 Zed 的 agent_servers JSON
 agent-gateway zed copy       # 复制到剪贴板
 ```
 
+### 手机端（实验功能）
+
+Gateway 的 `/app` 是状态栏应用。它通过 `/remote` WebSocket 和 relay/tunnel 连接，当前稳定性不足，
+可能出现断线或 Session 暂时不可用。需要多个客户端同时操作时，建议使用连接 Gateway `/ahp` 的 AHP client。
+
 ### 配置
 
 位于 `~/.agent-gateway/config.toml`，模板里每一项都有中英文注释。
 
 ```toml
 [gateway]
-bind = "127.0.0.1:48100"   # 仅监听回环地址；远程访问走 tunnel
+bind = "127.0.0.1:48100"   # 仅监听回环地址；/remote 使用实验性的 tunnel
 data_dir = "~/.agent-gateway"
 log_level = "info"
 
@@ -83,13 +92,18 @@ ticket_ttl = "60s"          # WSS ticket 一次性、短时效
 pairing_ttl = "5m"
 trust_loopback = true       # 本地调用可以不带凭证
 
-[relay]
-endpoint = "https://relay.example.com"
+# [relay]
+# endpoint = "https://relay.example.com"
 
-[tunnel]
-mode = "token"              # 或 "config"
-token = "…"                 # 永不写入日志
-hostname = "gw.example.com"
+# [tunnel]
+# mode = "token"              # 或 "config"
+# token = "…"                 # 永不写入日志
+# hostname = "gw.example.com"
+
+# 可选的外部 AHP adapter；Gateway 内置的 /ahp Host 不需要这一段
+[ahp]
+endpoint = "wss://ahp.example.com/channel"
+reconnect_interval = "3s"
 
 [[agents]]
 id = "codex"
@@ -100,9 +114,17 @@ args = ["-y", "@agentclientprotocol/codex-acp@latest"]
 
 Agent **必须显式配置**：Gateway 不会自动扫描本机可执行文件。
 
-macOS 的 `app/` 是一个桌面控制台。窗口底部状态区会根据真实状态显示
-**▶ Start gateway / Stop gateway**，并展示当前项目、Session 标题、通道在线状态、微信绑定和二维码。
-Sessions、Devices、Integrations 页面复用同一套本地 HTTP API，切换微信绑定或扫描二维码后会自动刷新。
+`app/` 提供原生桌面控制台：macOS 使用 AppKit 的 `objc2`、`objc2-foundation`、
+`objc2-app-kit` 实现状态栏应用，Windows 使用微软官方 `windows` crate 实现 Win32 窗口。
+点击 Refresh 会重新请求 `/sessions` 并重建列表；macOS 还会展示通道状态、微信绑定和二维码。
+
+“Phone/browser pairing QR” 是给 Agent Gateway 手机/Web 客户端使用的 JSON 配对载荷，
+不是微信登录二维码。用微信扫描它看到 JSON 是正常现象；微信登录二维码来自 AHP 通道，
+两者在菜单中已分开显示。
+
+Windows 发布包可在 PowerShell 中运行 `script/package-windows.ps1` 生成，包内包含 daemon、桌面
+App 和 README。提交到 `main` 后，`.github/workflows/release.yml` 会自动构建 Windows ZIP 和 macOS DMG，
+并发布为 GitHub pre-release。
 
 App bundle 内有两个 CLI：`agent-gateway` 是 Zed 调用的 bundle wrapper，
 `agent-gateway-daemon` 是状态栏启动的 web-enabled daemon；二者都直接链接同一个
@@ -131,16 +153,17 @@ CLI 路径按以下顺序自动发现：`AGENT_GATEWAY_BIN`、App bundle 中的�
 项目（`AGENT_GATEWAY_PROJECT`）、workspace 的 `target/debug` 或 `target/release`，最后是 `PATH`。
 安装后的 App 会优先使用同目录的 `agent-gateway` wrapper，因此 Zed 不依赖源码 checkout。
 
-## 两套协议
+## 三条协议边界
 
 | | 参与方 | 形式 |
 |---|---|---|
 | **ACP** | Gateway ↔ Agent | Agent stdio 上的 JSON-RPC 2.0，语义不修改 |
+| **AHP** | 多个 client ↔ Gateway | AHP WebSocket；多个 client 共享 Session、事件流和权限状态 |
 | **Remote 协议** | Gateway ↔ 手机/浏览器 | WebSocket 上的 JSON，见 [docs/remote-protocol.md](docs/remote-protocol.md) |
 
-两者分离是有意为之：Gateway 升级 ACP SDK 时不需要发新的 App；Remote 协议可以携带 ACP 不关心的
-概念（machine、ticket、回放游标）。Gateway 的扩展方法放在 `gateway/*`、`device/*` 等命名空间，
-不改变标准 ACP 的任何语义。
+ACP 和 AHP 分离是有意为之：Gateway 升级 ACP SDK 时不需要改变多客户端控制面；AHP 负责 client、
+Session、事件和权限的共享。Remote 协议保留给手机/浏览器的 relay/tunnel 路径，目前不稳定。Gateway
+的扩展方法放在 `gateway/*`、`device/*` 等命名空间，不改变标准 ACP 的任何语义。
 
 ### 本地 HTTP API
 
@@ -162,8 +185,9 @@ CLI 路径按以下顺序自动发现：`AGENT_GATEWAY_BIN`、App bundle 中的�
 | `GET` | `/ahp/status` | 本地 AHP 通道与二维码登录状态 |
 | `POST` | `/ahp/bind` | 本地显式绑定已有 Session |
 | `POST` | `/ahp/unbind` | 解除通道绑定 |
+| `WS` | `/ahp` | 面向多个本地 client 的 AHP Host |
 
-以下接口允许从 tunnel 访问，各自携带凭证：`GET /health`、`POST /pairing/consume`、
+以下接口属于实验性的 relay/tunnel 远程路径，各自携带凭证：`GET /health`、`POST /pairing/consume`、
 `POST /devices/{id}/ws-ticket`、`WS /remote?ticket=…`。
 
 ## 安全模型
@@ -195,7 +219,7 @@ crates/
   gateway-lark/     Lark/飞书签名回调与消息 API 适配器
   gateway-telegram/ Telegram Bot API 长轮询适配器
   gateway-cli/      `agent-gateway` 二进制（组装根）
-app/                macOS 状态栏 companion（独立 cargo workspace）
+app/                macOS/Windows 原生桌面 companion（独立 cargo workspace）
 migrations/         SQLite 表结构
 ```
 
@@ -218,9 +242,19 @@ Tool Call、权限请求和取消都是在真实的 JSON-RPC stdio 连接上验�
 
 ## 当前状态
 
-已可用：Agent 启动、prompt/cancel、流式输出、Tool Call、权限请求、事件回放、断线重连、设备配对、
-ticket、本地 API、远程 WebSocket 协议、cloudflared 监管、Relay 客户端与参考 Relay，以及支持显式
-Session 绑定和二维码状态的出站 AHP 通道。详见 [AHP / 微信通道](docs/ahp.md)。
+当前稳定性：
+
+| 路径 | 状态 | 范围 |
+|---|---|---|
+| 本地 ACP runtime 与 SessionManager | 稳定 | Agent 进程、持久化 Session、事件和权限 |
+| AHP Host（`/ahp`） | 主要多客户端路径 | 多个 client 订阅并操作 Gateway Session |
+| 微信 adapter | 稳定 | 当前稳定的聊天通道，支持显式 Session 绑定 |
+| Relay + tunnel + `/remote` | 实验性 / 不稳定 | 手机/浏览器传输，断线和可用性不保证 |
+| Lark / 飞书 adapter | 实验性 / 不稳定 | 已提供，但不承诺稳定性 |
+| Telegram adapter | 实验性 / 不稳定 | 已提供，但不承诺稳定性 |
+
+AHP 协议本身不提供微信登录；微信 adapter 负责登录和二维码，再把消息映射到选定的 Gateway Session。
+详见 [AHP / 微信通道](docs/ahp.md) 和 [聊天适配器](docs/chat-adapters.md)。
 
 部分实现：让 Zed / VS Code 接入同一个 Session 的 IDE Bridge 现在已有
 `agent-gateway acp-bridge` 入口和 daemon `/bridge` socket，但多 Session 编排和更细的仲裁策略

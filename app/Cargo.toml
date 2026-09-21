@@ -1,10 +1,10 @@
-# The macOS menu bar helper is a separate workspace so the root test suite does
-# not require Apple's AppKit SDK or a full Xcode installation.
+# The native desktop companion is a separate workspace so the root test suite
+# does not require platform SDKs or a full Xcode installation.
 [workspace]
 
 [package]
 name = "agent-gateway-app"
-description = "Agent Gateway macOS menu bar helper"
+description = "Agent Gateway native desktop companion"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
@@ -16,15 +16,28 @@ name = "agent-gateway-app"
 path = "src/main.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.25"
-objc = "0.2"
+# Use the maintained Objective-C bindings for the macOS UI.
+objc2 = "0.6.4"
+objc2-foundation = "0.3.2"
+objc2-app-kit = "0.3.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+
+[target.'cfg(windows)'.dependencies]
+# Official Microsoft Rust projection used by the native Windows companion.
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Controls",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dependencies]
 gateway-cli = { path = "../crates/gateway-cli" }
 gateway-config = { path = "../crates/gateway-config" }
 anyhow = "1"
 libc = "0.2"
-qrcode = { version = "0.14", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

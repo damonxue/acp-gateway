@@ -1,26 +1,30 @@
 # Agent Gateway
 
-**Run coding agents on your computer. Drive them from your phone.**
+**Run coding agents on your computer. Coordinate multiple clients through AHP.**
 
 [中文文档](README.zh-CN.md) · [Architecture](docs/architecture.md) · [Remote protocol](docs/remote-protocol.md) · [Security](docs/security.md) · [IDE integration](docs/ide-integration.md) · [Chat adapters](docs/chat-adapters.md)
 
 Agent Gateway is a local daemon that speaks the [Agent Client Protocol (ACP)][acp] to
-coding agents — Codex, Claude Code, OpenCode, Gemini CLI — and exposes their sessions to
-remote clients over an authenticated WebSocket. Close your laptop lid on a running agent,
-open your phone, and the session is still there: the same output, the same tool calls, the
-same pending permission prompt.
+coding agents — Codex, Claude Code, OpenCode, Gemini CLI — and owns their sessions. Its
+primary multi-client control path is the Agent Host Protocol (AHP): multiple AHP clients
+can connect to the gateway, subscribe to the same session, receive the same event stream,
+and compete safely for permission decisions.
 
-It is **not** a new agent runtime. It is an ACP proxy, a session manager and a remote
-transport:
+The phone/browser `/remote` path is a separate, older transport. It depends on the relay
+and tunnel components, which are currently unstable and should be treated as experimental.
+
+It is **not** a new agent runtime. It is an ACP proxy, an AHP host, a session manager,
+and an optional remote transport:
 
 ```text
-           phone / browser
-                 │  wss + single-use ticket
+       AHP clients (multiple)
+     Zed · VS Code · AHPX · adapters
+                 │  AHP WebSocket
                  ▼
         ┌────────────────────────────────────┐
         │            Agent Gateway              │
-        │  ACP proxy · sessions · event log     │
-        │  device pairing · tickets · tunnel    │
+        │  AHP host · ACP proxy · sessions      │
+        │  event log · channel/session binding  │
         └──────────────────┬─────────────────┘
                          │ ACP (JSON-RPC 2.0 over stdio)
                          ▼
@@ -65,9 +69,14 @@ agent-gateway sessions prompt $SID "why do the tests fail?"
 agent-gateway sessions watch $SID                     # follow the event stream
 ```
 
-### From your phone
+### From your phone (experimental)
 
-The gateway serves a web client at **`/app`** — that is the phone UI. Build it once:
+The gateway serves a web client at **`/app`**. Its phone/browser connection uses the
+`/remote` WebSocket together with the relay/tunnel path, which is currently unstable.
+Use it for experiments and expect reconnects or unavailable sessions. For multiple
+simultaneous clients, use an AHP client against the gateway's `/ahp` endpoint instead.
+
+Build the web client once:
 
 ```bash
 cd web && pnpm install && pnpm build
@@ -89,7 +98,7 @@ Open `http://127.0.0.1:48100/app` on the same machine, or
 generates its own key, signs for a single-use ticket and connects over the WebSocket — no
 account, no third party. See [docs/remote-protocol.md](docs/remote-protocol.md).
 
-### macOS app and installer
+### Desktop apps and installers
 
 ```bash
 cargo dmg          # "Agent Gateway.app" + a .dmg, web client included
@@ -102,13 +111,23 @@ ad-hoc signed, so on another Mac: `xattr -dr com.apple.quarantine "/Applications
 `MACOS_SIGNING_KEY` (and `APPLE_NOTARIZATION_*`) and pass `--sign` for a distributable
 build.
 
-The optional `app/` target is a small native macOS menu bar companion built with
-Cocoa/AppKit (`cocoa` and `objc`), without GPUI or a document window. Opening its
-status item refreshes the live gateway state and `/sessions` data, exposes
-state-driven Start/Stop control, and lets you inspect each session's title,
-project, working directory, agent, origin and status. It also shows WeChat,
-Lark and Telegram health, displays available WeChat or phone pairing QR codes,
-and switches the WeChat binding through the running Gateway CLI supervisor.
+The optional `app/` target provides native desktop companions. On macOS it is a
+menu bar app built with AppKit through `objc2`, `objc2-foundation` and
+`objc2-app-kit`; on Windows it is a Win32 app built with Microsoft's `windows`
+crate. Both refresh the live gateway state and `/sessions` data and expose the
+local desktop controls. The macOS menu also shows WeChat, Lark and Telegram
+health, pairing QR codes, and the WeChat session binding.
+
+The phone/browser pairing QR is an Agent Gateway JSON payload intended for the
+Gateway web client. It is separate from the WeChat login QR supplied by an AHP
+channel; scanning the former with WeChat will therefore show JSON by design.
+
+On Windows, build the app and daemon with `cargo build --release --locked
+--manifest-path app/Cargo.toml` and `cargo build --release --locked -p
+gateway-cli`, then run `script/package-windows.ps1` in PowerShell. The resulting
+ZIP contains the daemon, desktop app, and README files. Pushes to `main` run
+`.github/workflows/release.yml`, build both installers, and publish them as a
+pre-release on GitHub.
 
 The App bundle contains two CLI binaries: `agent-gateway` is the bundle-local
 wrapper that Zed invokes, and `agent-gateway-daemon` is the web-enabled daemon
@@ -120,7 +139,7 @@ started by the status item. Both link the same `gateway-cli` Rust library.
 
 ```toml
 [gateway]
-bind = "127.0.0.1:48100"   # loopback only; remote access goes through the tunnel
+bind = "127.0.0.1:48100"   # loopback only; the /remote path uses the experimental tunnel
 data_dir = "~/.agent-gateway"
 log_level = "info"
 
@@ -136,6 +155,11 @@ endpoint = "https://relay.example.com"
 mode = "token"              # or "config"
 token = "…"                 # never written to a log
 hostname = "gw.example.com"
+
+# Optional external AHP adapter. The built-in AHP Host at /ahp does not need this section.
+[ahp]
+endpoint = "wss://ahp.example.com/channel"
+reconnect_interval = "3s"
 
 [[agents]]
 id = "codex"
@@ -203,8 +227,10 @@ Loopback only, for the CLI, scripts and IDE plugins:
 | `GET` | `/ahp/status` | local AHP channel and QR login state |
 | `POST` | `/ahp/bind` | local explicit binding of an existing session |
 | `POST` | `/ahp/unbind` | local channel unbinding |
+| `WS` | `/ahp` | AHP Host for multiple local clients |
 
-Reachable from anywhere the gateway is (i.e. through the tunnel), each with its own
+The remote-facing endpoints are part of the experimental relay/tunnel path. They are
+reachable from anywhere the gateway is (i.e. through the tunnel), each with its own
 credential: `GET /health`, `POST /pairing/consume`, `POST /devices/{id}/ws-ticket`,
 `WS /remote?ticket=…`.
 
@@ -240,7 +266,7 @@ crates/
   gateway-wechat/   embedded WeChat Bot adapter
   gateway-lark/     Lark/Feishu signed webhook and message API adapter
   gateway-telegram/ Telegram Bot API long-polling adapter
-app/                macOS menu bar companion — its own cargo workspace
+app/                native macOS/Windows desktop companion — its own cargo workspace
 web/                phone and browser client (TypeScript + Preact)
 xtask/              build tasks behind `cargo dmg`
 script/             bundle-mac.sh: .app + .dmg
@@ -268,11 +294,19 @@ See [docs/development.md](docs/development.md).
 
 ## Status
 
-Working today: agent launch, prompt/cancel, streaming, tool calls, permissions, event
-replay, reconnect, device pairing, tickets, the local API, the remote WebSocket protocol,
-the cloudflared supervisor, the relay client, a reference relay, and the outbound AHP
-channel with explicit session binding and QR status. Telegram long polling and Lark signed
-webhook adapters are available with explicit chat/session bindings. See
+Current reliability status:
+
+| Path | Status | Scope |
+|---|---|---|
+| Local ACP runtime and SessionManager | Stable | Agent processes, durable sessions, events and permissions |
+| AHP Host (`/ahp`) | Primary multi-client path | Multiple clients can subscribe to and drive gateway sessions |
+| WeChat adapter | Stable | Current stable chat channel with explicit Session binding |
+| Relay + tunnel + `/remote` | Experimental / unstable | Phone/browser transport; reconnects and availability are not guaranteed |
+| Lark / Feishu adapter | Experimental / unstable | Available, but not a stability-guaranteed channel |
+| Telegram adapter | Experimental / unstable | Available, but not a stability-guaranteed channel |
+
+The AHP specification does not provide WeChat login by itself. The WeChat adapter owns
+login and QR handling, then maps messages to the selected Gateway Session. See
 [docs/ahp.md](docs/ahp.md) and [docs/chat-adapters.md](docs/chat-adapters.md).
 
 Partially implemented: the IDE bridge that lets Zed/VS Code attach to a gateway session
