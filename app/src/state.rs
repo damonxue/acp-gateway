@@ -1042,7 +1042,7 @@ async fn load_overview(
 )> {
     let health = client.health().await?;
     let agents = client.list_agents().await?;
-    let sessions = client.list_sessions().await?;
+    let sessions = client.refresh_sessions().await?;
     let devices = client.list_devices().await?;
     let ahp = client.ahp_status().await.unwrap_or_default();
     Ok((health, sessions, agents, devices, ahp))

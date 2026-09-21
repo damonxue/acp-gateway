@@ -1,10 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
-# The GPUI desktop app is a separate workspace: building it requires a full
-# Xcode install (Metal shader compilation), and `cargo test --workspace` must
-# keep working without one. See app/Cargo.toml.
-exclude = ["app"]
+members = ["crates/*", "app", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -29,6 +25,7 @@ gateway-ahp = { path = "crates/gateway-ahp", version = "0.1.0" }
 gateway-wechat = { path = "crates/gateway-wechat", version = "0.1.0" }
 gateway-lark = { path = "crates/gateway-lark", version = "0.1.0" }
 gateway-telegram = { path = "crates/gateway-telegram", version = "0.1.0" }
+agent-gateway-app = { path = "app", version = "0.1.0" }
 ahp-types = "0.9.0"
 
 # --- ACP ---

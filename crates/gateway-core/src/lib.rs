@@ -76,13 +76,13 @@ pub mod metrics;
 pub mod permission;
 pub mod ports;
 pub mod session;
-pub mod transcript;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod transcript;
 
 pub use agent::{
-    AgentDescriptor, AgentRuntime, AgentSessionHandle, EventSink, LaunchRequest, LaunchedAgent,
-    PromptBlock,
+    AcpSessionInfo, AgentDescriptor, AgentRuntime, AgentSessionHandle, EventSink, LaunchRequest,
+    LaunchedAgent, PromptBlock,
 };
 pub use bridge::{BridgeMessage, DaemonMessage};
 pub use bus::{EventBus, EventSubscription};

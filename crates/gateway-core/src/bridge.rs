@@ -63,6 +63,16 @@ pub enum BridgeMessage {
         /// Why, for the session's history.
         reason: String,
     },
+    /// Response to a daemon-triggered ACP `session/list` refresh.
+    SessionList {
+        /// Correlates this response with [`DaemonMessage::RefreshSessions`].
+        request_id: String,
+        /// Sessions reported by the proxied ACP agent.
+        sessions: Vec<crate::agent::AcpSessionInfo>,
+        /// Safe error text when the agent does not support session listing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 /// Messages the daemon sends to the bridge.
@@ -97,6 +107,11 @@ pub enum DaemonMessage {
     Error {
         /// Human-readable reason.
         message: String,
+    },
+    /// Ask the ACP bridge to query its real agent with `session/list`.
+    RefreshSessions {
+        /// Correlation id returned in [`BridgeMessage::SessionList`].
+        request_id: String,
     },
 }
 

@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentChunk, NewSessionRequest, NewSessionResponse, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    CancelNotification, ContentChunk, ListSessionsRequest, NewSessionRequest, NewSessionResponse,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionId as AcpSessionId, SessionNotification, SessionUpdate,
 };
 use agent_client_protocol::{
@@ -35,7 +35,7 @@ use agent_client_protocol::{
     JsonRpcResponse, Responder, Stdio,
 };
 use futures::{SinkExt, StreamExt};
-use gateway_core::agent::AgentDescriptor;
+use gateway_core::agent::{AcpSessionInfo, AgentDescriptor};
 use gateway_core::bridge::{BRIDGE_PATH, BridgeMessage, DaemonMessage};
 use gateway_core::error::{GatewayError, Result};
 use gateway_core::event::EventType;
@@ -350,6 +350,46 @@ async fn command_loop(
             }
             DaemonMessage::Error { message } => {
                 warn!(%message, "daemon bridge error");
+            }
+            DaemonMessage::RefreshSessions { request_id } => {
+                let result = real_agent
+                    .send_request(ListSessionsRequest::new())
+                    .block_task()
+                    .await
+                    .map(|response| {
+                        response
+                            .sessions
+                            .into_iter()
+                            .map(|session| AcpSessionInfo {
+                                acp_session_id: session.session_id.to_string(),
+                                cwd: session.cwd,
+                                title: session.title,
+                                updated_at: session.updated_at,
+                            })
+                            .collect()
+                    });
+                match result {
+                    Ok(sessions) => {
+                        state
+                            .reporter
+                            .send(BridgeMessage::SessionList {
+                                request_id,
+                                sessions,
+                                error: None,
+                            })
+                            .await;
+                    }
+                    Err(error) => {
+                        state
+                            .reporter
+                            .send(BridgeMessage::SessionList {
+                                request_id,
+                                sessions: Vec::new(),
+                                error: Some(error.to_string()),
+                            })
+                            .await;
+                    }
+                }
             }
             _ => {}
         }

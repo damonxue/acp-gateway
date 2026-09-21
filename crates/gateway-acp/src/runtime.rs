@@ -31,16 +31,18 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, FileSystemCapabilities, Implementation,
-    InitializeRequest, NewSessionRequest, ReadTextFileRequest, ReadTextFileResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionId as AcpSessionId, SessionNotification, WriteTextFileRequest, WriteTextFileResponse,
+    InitializeRequest, ListSessionsRequest, NewSessionRequest, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SessionId as AcpSessionId, SessionNotification,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo, LineDirection, Responder,
 };
 use async_trait::async_trait;
 use gateway_core::agent::{
-    AgentRuntime, AgentSessionHandle, EventSink, LaunchRequest, LaunchedAgent, PromptBlock,
+    AcpSessionInfo, AgentRuntime, AgentSessionHandle, EventSink, LaunchRequest, LaunchedAgent,
+    PromptBlock,
 };
 use gateway_core::error::{GatewayError, Result};
 use gateway_core::ids::{PermissionId, SessionId};
@@ -151,6 +153,9 @@ enum Command {
         id: PermissionId,
         decision: PermissionDecision,
     },
+    Refresh {
+        response: oneshot::Sender<Result<Vec<AcpSessionInfo>>>,
+    },
     Shutdown,
 }
 
@@ -197,6 +202,14 @@ impl AgentSessionHandle for AcpSessionHandle {
         self.commands.send(Command::Shutdown).await.ok();
         self.alive.store(false, Ordering::Release);
         Ok(())
+    }
+
+    async fn refresh_sessions(&self) -> Result<Vec<AcpSessionInfo>> {
+        let (response, result) = oneshot::channel();
+        self.send(Command::Refresh { response }).await?;
+        result
+            .await
+            .map_err(|_| GatewayError::AgentUnavailable("agent refresh task ended".to_owned()))?
     }
 
     fn is_alive(&self) -> bool {
@@ -467,6 +480,28 @@ impl SessionTask {
                             } else {
                                 debug!(permission_id = %id, "decision for an unknown permission");
                             }
+                        }
+                        Command::Refresh { response } => {
+                            let result = cx
+                                .send_request(ListSessionsRequest::new())
+                                .block_task()
+                                .await
+                                .map(|response| {
+                                    response
+                                        .sessions
+                                        .into_iter()
+                                        .map(|session| AcpSessionInfo {
+                                            acp_session_id: session.session_id.to_string(),
+                                            cwd: session.cwd,
+                                            title: session.title,
+                                            updated_at: session.updated_at,
+                                        })
+                                        .collect()
+                                })
+                                .map_err(|error| {
+                                    GatewayError::AgentProtocol(error.to_string())
+                                });
+                            let _ = response.send(result);
                         }
                         Command::Shutdown => break,
                     }

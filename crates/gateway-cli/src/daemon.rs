@@ -92,9 +92,20 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     let mut health_sources: Vec<Arc<dyn HealthSource>> = vec![
         Arc::new(TunnelHealth(Arc::clone(&tunnel))) as Arc<dyn HealthSource>,
         Arc::new(RelayHealth(Arc::clone(&relay))) as Arc<dyn HealthSource>,
-        Arc::new(AhpHealth(Arc::clone(&ahp))) as Arc<dyn HealthSource>,
-        Arc::new(WechatHealth(Arc::clone(&wechat))) as Arc<dyn HealthSource>,
     ];
+    // AHP and WeChat are optional channels.  Only publish a health entry for
+    // a channel the user configured; an absent optional section is not a
+    // failed subsystem and should not appear as `disabled` in `/health`.
+    if config.ahp.is_some() {
+        health_sources.push(Arc::new(AhpHealth(Arc::clone(&ahp))));
+    }
+    if config
+        .wechat
+        .as_ref()
+        .is_some_and(|section| section.enabled)
+    {
+        health_sources.push(Arc::new(WechatHealth(Arc::clone(&wechat))));
+    }
     if config.lark.as_ref().is_some_and(|section| section.enabled) {
         health_sources.push(Arc::new(ConfiguredHealth {
             name: "lark",

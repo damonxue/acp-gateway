@@ -13,6 +13,7 @@
 //!   bridge ◄─prompt── BridgeHandle::submit_prompt (from a phone)
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,14 +22,14 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::Response;
 use futures::{SinkExt, StreamExt};
-use gateway_core::agent::{AgentSessionHandle, PromptBlock};
+use gateway_core::agent::{AcpSessionInfo, AgentSessionHandle, PromptBlock};
 use gateway_core::bridge::{BridgeMessage, DaemonMessage};
 use gateway_core::error::{GatewayError, Result};
 use gateway_core::event::EventDraft;
 use gateway_core::ids::{PermissionId, SessionId};
 use gateway_core::manager::AdoptSessionSpec;
 use gateway_core::permission::PermissionDecision;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 
 use crate::error::ApiError;
@@ -59,6 +60,10 @@ async fn serve(state: AppState, socket: WebSocket) {
     let (mut sink, mut incoming) = socket.split();
     let (commands_tx, mut commands_rx) = mpsc::channel::<DaemonMessage>(COMMAND_QUEUE);
     let alive = Arc::new(AtomicBool::new(true));
+    let refresh_waiters = Arc::new(std::sync::Mutex::new(HashMap::<
+        String,
+        oneshot::Sender<Result<Vec<AcpSessionInfo>>>,
+    >::new()));
 
     let writer = tokio::spawn(async move {
         while let Some(command) = commands_rx.recv().await {
@@ -110,6 +115,7 @@ async fn serve(state: AppState, socket: WebSocket) {
                 let handle = Arc::new(BridgeHandle {
                     commands: commands_tx.clone(),
                     alive: Arc::clone(&alive),
+                    refresh_waiters: Arc::clone(&refresh_waiters),
                 });
                 let adopted = state
                     .manager()
@@ -172,6 +178,23 @@ async fn serve(state: AppState, socket: WebSocket) {
                 break;
             }
 
+            BridgeMessage::SessionList {
+                request_id,
+                sessions,
+                error,
+            } => {
+                let waiter = refresh_waiters
+                    .lock()
+                    .expect("refresh waiter lock")
+                    .remove(&request_id);
+                if let Some(waiter) = waiter {
+                    let result = error.map_or(Ok(sessions), |message| {
+                        Err(GatewayError::AgentUnavailable(message))
+                    });
+                    let _ = waiter.send(result);
+                }
+            }
+
             _ => {
                 warn!("ignoring an unknown bridge message");
             }
@@ -201,6 +224,8 @@ async fn send(commands: &mpsc::Sender<DaemonMessage>, message: DaemonMessage) {
 struct BridgeHandle {
     commands: mpsc::Sender<DaemonMessage>,
     alive: Arc<AtomicBool>,
+    refresh_waiters:
+        Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Result<Vec<AcpSessionInfo>>>>>>,
 }
 
 impl BridgeHandle {
@@ -240,6 +265,34 @@ impl AgentSessionHandle for BridgeHandle {
         // control.
         self.alive.store(false, Ordering::Release);
         Ok(())
+    }
+
+    async fn refresh_sessions(&self) -> Result<Vec<AcpSessionInfo>> {
+        let request_id = SessionId::generate().to_string();
+        let (response, result) = oneshot::channel();
+        self.refresh_waiters
+            .lock()
+            .expect("refresh waiter lock")
+            .insert(request_id.clone(), response);
+        if self
+            .commands
+            .send(DaemonMessage::RefreshSessions {
+                request_id: request_id.clone(),
+            })
+            .await
+            .is_err()
+        {
+            self.refresh_waiters
+                .lock()
+                .expect("refresh waiter lock")
+                .remove(&request_id);
+            return Err(GatewayError::AgentUnavailable(
+                "the IDE bridge is gone".to_owned(),
+            ));
+        }
+        result
+            .await
+            .map_err(|_| GatewayError::AgentUnavailable("agent refresh task ended".to_owned()))?
     }
 
     fn is_alive(&self) -> bool {

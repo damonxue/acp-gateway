@@ -1,7 +1,3 @@
-# The native desktop companion is a separate workspace so the root test suite
-# does not require platform SDKs or a full Xcode installation.
-[workspace]
-
 [package]
 name = "agent-gateway-app"
 description = "Agent Gateway native desktop companion"

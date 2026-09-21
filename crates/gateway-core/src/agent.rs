@@ -142,6 +142,25 @@ pub struct LaunchedAgent {
     pub handle: Arc<dyn AgentSessionHandle>,
 }
 
+/// Session metadata returned by an agent's ACP `session/list` request.
+///
+/// The gateway keeps its own session identity and lifecycle state, so this
+/// type contains only the ACP-owned fields that can be refreshed from the
+/// live agent connection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcpSessionInfo {
+    /// Identifier assigned by the ACP agent.
+    pub acp_session_id: String,
+    /// Working directory reported by the agent.
+    pub cwd: PathBuf,
+    /// Human-readable title, when the agent has one.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Agent-provided last-activity timestamp, when available.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 /// Starts agents. The *strategy* seam of the gateway.
 ///
 /// 负责启动 Agent——Gateway 的*策略*接缝。
@@ -192,6 +211,17 @@ pub trait AgentSessionHandle: Send + Sync + std::fmt::Debug {
     ///
     /// 拆掉 Agent 连接。
     async fn shutdown(&self) -> Result<()>;
+
+    /// Ask the live ACP connection for its current session list.
+    ///
+    /// Agents that do not advertise `session/list` may keep the default
+    /// unsupported result; a refresh then leaves the persisted projection
+    /// intact while still returning the other sessions.
+    async fn refresh_sessions(&self) -> Result<Vec<AcpSessionInfo>> {
+        Err(crate::error::GatewayError::AgentUnavailable(
+            "agent does not support ACP session/list".to_owned(),
+        ))
+    }
 
     /// Whether the underlying connection is still usable.
     ///

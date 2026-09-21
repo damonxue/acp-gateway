@@ -86,13 +86,20 @@ fn start_daemon() {
 
 fn sessions() -> Vec<String> {
     let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(700))
+        .timeout(Duration::from_secs(3))
         .build()
     {
         Ok(client) => client,
         Err(error) => return vec![format!("Gateway error: {error}")],
     };
-    let response = match client.get(format!("{}/sessions", base_url())).send() {
+    let base = base_url();
+    let refresh = match client.post(format!("{base}/sessions/refresh")).send() {
+        Ok(response) if response.status().is_success() => response,
+        Ok(response) => return vec![format!("Gateway refresh returned {}", response.status())],
+        Err(error) => return vec![format!("Gateway refresh failed: {error}")],
+    };
+    drop(refresh);
+    let response = match client.get(format!("{base}/sessions")).send() {
         Ok(response) => response,
         Err(error) => return vec![format!("Gateway offline: {error}")],
     };
@@ -124,15 +131,20 @@ fn sessions() -> Vec<String> {
 }
 
 unsafe fn refresh_list() {
-    let Some(list) = SESSION_LIST else { return };
-    let _ = SendMessageW(list, Some(WPARAM(LB_RESETCONTENT as usize)), None);
+    let Some(list) = (unsafe { SESSION_LIST }) else {
+        return;
+    };
+    let _ = unsafe { SendMessageW(list, LB_RESETCONTENT, None, None) };
     for session in sessions() {
         let value = wide(&session);
-        let _ = SendMessageW(
-            list,
-            Some(WPARAM(LB_ADDSTRING as usize)),
-            Some(LPARAM(value.as_ptr() as isize)),
-        );
+        let _ = unsafe {
+            SendMessageW(
+                list,
+                LB_ADDSTRING,
+                None,
+                Some(LPARAM(value.as_ptr() as isize)),
+            )
+        };
     }
 }
 
@@ -148,55 +160,59 @@ unsafe extern "system" fn window_proc(
             let button_title = wide("Refresh sessions");
             let list_class = wide("LISTBOX");
             let empty = wide("");
-            let button = CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                PCWSTR(button_class.as_ptr()),
-                PCWSTR(button_title.as_ptr()),
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-                16,
-                16,
-                160,
-                30,
-                Some(hwnd),
-                Some(HMENU(REFRESH_ID as *mut _)),
-                None,
-                None,
-            );
+            let button = unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    PCWSTR(button_class.as_ptr()),
+                    PCWSTR(button_title.as_ptr()),
+                    WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+                    16,
+                    16,
+                    160,
+                    30,
+                    Some(hwnd),
+                    Some(HMENU(REFRESH_ID as *mut _)),
+                    None,
+                    None,
+                )
+            };
             let _ = button;
-            SESSION_LIST = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                PCWSTR(list_class.as_ptr()),
-                PCWSTR(empty.as_ptr()),
-                WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(LBS_NOTIFY as u32),
-                16,
-                60,
-                740,
-                450,
-                Some(hwnd),
-                Some(HMENU(LIST_ID as *mut _)),
-                None,
-                None,
-            )
-            .ok();
-            refresh_list();
+            unsafe {
+                SESSION_LIST = CreateWindowExW(
+                    WS_EX_CLIENTEDGE,
+                    PCWSTR(list_class.as_ptr()),
+                    PCWSTR(empty.as_ptr()),
+                    WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(LBS_NOTIFY as u32),
+                    16,
+                    60,
+                    740,
+                    450,
+                    Some(hwnd),
+                    Some(HMENU(LIST_ID as *mut _)),
+                    None,
+                    None,
+                )
+                .ok();
+                refresh_list();
+            }
             LRESULT(0)
         }
         WM_COMMAND if (wparam.0 & 0xffff) == REFRESH_ID => {
-            refresh_list();
+            unsafe { refresh_list() };
             LRESULT(0)
         }
         WM_DESTROY => {
-            SESSION_LIST = None;
+            unsafe { SESSION_LIST = None };
             if let Ok(mut slot) = daemon_slot().lock()
                 && let Some(mut child) = slot.take()
             {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            PostQuitMessage(0);
+            unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
-        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+        _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
     }
 }
 
@@ -234,7 +250,6 @@ fn run_inner() -> WindowsResult<()> {
             None,
         )?;
         ShowWindow(window, SW_SHOW);
-        let _ = UpdateWindow(window);
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
             TranslateMessage(&message);

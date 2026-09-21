@@ -162,4 +162,6 @@ size="$(du -h "$dmg" | cut -f1)"
 echo
 echo "built ${dmg} (${size})"
 echo "  open \"${root}/${dmg}\"   # then drag the app to Applications"
-[ "$open_after" = true ] && open -R "$dmg"
+if [ "$open_after" = true ]; then
+  open -R "$dmg"
+fi

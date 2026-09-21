@@ -145,6 +145,22 @@ fn base_url() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:48100".to_owned())
 }
 
+fn refresh_gateway_sessions() -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post(format!("{}/sessions/refresh", base_url()))
+        .send()
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("gateway refresh returned {}", response.status()))
+    }
+}
+
 fn fetch_snapshot() -> GatewaySnapshot {
     let base = base_url();
     let client = match reqwest::blocking::Client::builder()
@@ -429,6 +445,9 @@ define_class!(
                 // Close that tracking pass first; the next opening then shows
                 // the freshly fetched /sessions response.
                 menu.cancelTrackingWithoutAnimation();
+                if let Err(error) = refresh_gateway_sessions() {
+                    eprintln!("cannot refresh ACP sessions: {error}");
+                }
                 self.rebuild_menu_with(menu);
             }
         }
@@ -525,7 +544,7 @@ define_class!(
 
         #[unsafe(method(openDashboard:))]
         fn open_dashboard(&self, _sender: Option<&AnyObject>) {
-            let _ = Command::new("open").arg(format!("{}/app", base_url())).spawn();
+            let _ = Command::new("open").arg(format!("{}/health", base_url())).spawn();
         }
 
         #[unsafe(method(copyZed:))]

@@ -38,7 +38,8 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::agent::{
-    AgentDescriptor, AgentRuntime, AgentSessionHandle, EventSink, LaunchRequest, PromptBlock,
+    AcpSessionInfo, AgentDescriptor, AgentRuntime, AgentSessionHandle, EventSink, LaunchRequest,
+    PromptBlock,
 };
 use crate::bus::{EventBus, EventSubscription, SessionLifecycle};
 use crate::error::{GatewayError, Result};
@@ -714,6 +715,87 @@ impl SessionManager {
         self.session_repo
             .list(&self.config.machine_id, self.config.max_session_list)
             .await
+    }
+
+    /// Refresh live session metadata through each attached ACP connection,
+    /// then return the persisted session projection.
+    ///
+    /// A database row is still the gateway's identity and lifecycle source of
+    /// truth.  The explicit refresh path asks the live agent for ACP session
+    /// metadata first, so titles and other agent-owned details do not remain
+    /// stale after the desktop user presses Refresh.  Agents without
+    /// `session/list` are skipped and their existing rows are retained.
+    pub async fn refresh_sessions(&self) -> Result<Vec<AgentSession>> {
+        let managed: Vec<Arc<ManagedSession>> = self
+            .sessions
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+
+        for managed in managed {
+            let current = managed.meta.read().await.clone();
+            let Some(acp_session_id) = current.acp_session_id.clone() else {
+                continue;
+            };
+            let Some(handle) = managed.handle.read().await.clone() else {
+                continue;
+            };
+            let infos = match handle.refresh_sessions().await {
+                Ok(infos) => infos,
+                Err(error) => {
+                    debug!(
+                        session_id = %current.id,
+                        error = %error,
+                        "ACP session refresh unavailable; retaining persisted session"
+                    );
+                    continue;
+                }
+            };
+            let Some(info) = infos
+                .into_iter()
+                .find(|info| info.acp_session_id == acp_session_id)
+            else {
+                continue;
+            };
+            self.apply_acp_session_info(&managed, &current, info)
+                .await?;
+        }
+
+        self.list_sessions().await
+    }
+
+    async fn apply_acp_session_info(
+        &self,
+        managed: &Arc<ManagedSession>,
+        current: &AgentSession,
+        info: AcpSessionInfo,
+    ) -> Result<()> {
+        if current.title == info.title {
+            return Ok(());
+        }
+        let mut meta = managed.meta.write().await;
+        // A concurrent ACP event may have already supplied the same or newer
+        // title while the list request was in flight.
+        if meta.title == info.title {
+            return Ok(());
+        }
+        meta.title = info.title;
+        self.session_repo
+            .update_runtime_state(
+                &meta.id,
+                meta.status,
+                meta.last_seq,
+                meta.acp_session_id.as_deref(),
+                meta.title.as_deref(),
+                meta.updated_at,
+            )
+            .await?;
+        let _ = self.lifecycle.send(SessionLifecycle {
+            session_id: meta.id.clone(),
+            status: meta.status,
+            created: false,
+        });
+        Ok(())
     }
 
     /// Subscribe to a session's live event stream.

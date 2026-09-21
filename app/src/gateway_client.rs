@@ -178,6 +178,13 @@ impl GatewayClient {
         Ok(sessions)
     }
 
+    pub async fn refresh_sessions(&self) -> Result<Vec<AgentSession>> {
+        let SessionList { sessions } = self
+            .post_json("/sessions/refresh", serde_json::json!({}))
+            .await?;
+        Ok(sessions)
+    }
+
     pub async fn get_session(&self, session_id: &str) -> Result<SessionSnapshot> {
         self.get_json(&format!("/sessions/{}", encode_path_segment(session_id)))
             .await

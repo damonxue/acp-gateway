@@ -49,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/machines/current", get(current_machine))
         .route("/agents", get(list_agents))
         .route("/sessions", get(list_sessions).post(create_session))
+        .route("/sessions/refresh", post(refresh_sessions))
         .route("/sessions/{session_id}", get(get_session))
         .route("/sessions/{session_id}/prompt", post(prompt))
         .route("/sessions/{session_id}/cancel", post(cancel))
@@ -206,6 +207,14 @@ async fn list_sessions(access: Access, State(state): State<AppState>) -> ApiResu
     access.require_local()?;
     Ok(Json(SessionList {
         sessions: state.manager().list_sessions().await?,
+    }))
+}
+
+/// `POST /sessions/refresh` — ask attached ACP agents for fresh metadata.
+async fn refresh_sessions(access: Access, State(state): State<AppState>) -> ApiResult<SessionList> {
+    access.require_local()?;
+    Ok(Json(SessionList {
+        sessions: state.manager().refresh_sessions().await?,
     }))
 }
 
