@@ -102,12 +102,11 @@ ad-hoc signed, so on another Mac: `xattr -dr com.apple.quarantine "/Applications
 `MACOS_SIGNING_KEY` (and `APPLE_NOTARIZATION_*`) and pass `--sign` for a distributable
 build.
 
-The optional `app/` target is a small macOS menu bar companion. It has no large
-session window: it starts the bundled CLI daemon when the status item opens, and
-**Copy Zed agent_servers** calls the same Rust generator as `agent-gateway zed copy`.
-**Choose gateway project…** is available for development checkouts; select the
-directory containing the workspace `Cargo.toml`, then build `gateway-cli`. The
-selection is stored under `~/Library/Application Support/Agent Gateway/`.
+The optional `app/` target is a macOS desktop control panel. Its lower status
+area exposes a state-driven Start/Stop gateway control, the selected project's
+session title and workspace, channel health, WeChat binding, and QR pairing
+state. The Sessions, Devices and Integrations views use the same local HTTP API
+as the CLI, so changing a binding or scanning a QR code takes effect immediately.
 
 The App bundle contains two CLI binaries: `agent-gateway` is the bundle-local
 wrapper that Zed invokes, and `agent-gateway-daemon` is the web-enabled daemon

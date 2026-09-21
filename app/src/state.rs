@@ -8,9 +8,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use futures::StreamExt;
-use gpui::{AppContext as _, Entity, IntoElement, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder as _, px, rgb};
+use gpui::{
+    AppContext as _, Entity, IntoElement, ParentElement, Render, Styled, Task, Window, div,
+    prelude::FluentBuilder as _, px, rgb,
+};
 use gpui_component::input::InputState;
 use tokio::sync::{mpsc, oneshot};
 
@@ -24,10 +27,9 @@ use gateway_core::manager::SessionSnapshot;
 use gateway_core::session::{AgentSession, SessionStatus};
 use gateway_core::transcript::{Transcript, fold_transcript};
 use gateway_remote::protocol::{AgentSummary, PermissionAnswer, PromptInput, ServerMessage};
-use gateway_remote::state::ComponentHealth;
 
 use crate::daemon::{self, DaemonConfig};
-use crate::gateway_client::{GatewayClient, GatewayHealth, RemoteFrame};
+use crate::gateway_client::{AhpStatusSnapshot, GatewayClient, GatewayHealth, RemoteFrame};
 use crate::views;
 use crate::zed_settings::{ZedSettingsManager, ZedSettingsSnapshot};
 
@@ -111,6 +113,7 @@ pub enum UiUpdate {
         sessions: Vec<AgentSession>,
         agents: Vec<AgentSummary>,
         devices: Vec<Device>,
+        ahp: AhpStatusSnapshot,
     },
     Connection {
         status: ConnectionStatus,
@@ -145,6 +148,7 @@ pub struct AppState {
     pub(crate) sessions: Vec<AgentSession>,
     pub(crate) agents: Vec<AgentSummary>,
     pub(crate) devices: Vec<Device>,
+    pub(crate) ahp_status: AhpStatusSnapshot,
     pub(crate) selected_session_id: Option<String>,
     pub(crate) selected_session_snapshot: Option<SessionSnapshot>,
     pub(crate) selected_transcript: Transcript,
@@ -165,7 +169,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(services: Arc<AppServices>, window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
+    pub fn new(
+        services: Arc<AppServices>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| home_dir().to_path_buf());
         let prompt_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -174,10 +182,7 @@ impl AppState {
                 .placeholder("Send a prompt...")
         });
         let cwd_placeholder = cwd.to_string_lossy().to_string();
-        let workspace_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(cwd_placeholder)
-        });
+        let workspace_input = cx.new(|cx| InputState::new(window, cx).placeholder(cwd_placeholder));
         let cwd_input = cx.new(|cx| InputState::new(window, cx).placeholder("Optional cwd"));
 
         let (updates_tx, updates_rx) = mpsc::unbounded_channel();
@@ -201,6 +206,7 @@ impl AppState {
             sessions: Vec::new(),
             agents: Vec::new(),
             devices: Vec::new(),
+            ahp_status: AhpStatusSnapshot::default(),
             selected_session_id: None,
             selected_session_snapshot: None,
             selected_transcript: Transcript::default(),
@@ -240,9 +246,47 @@ impl AppState {
 
         if !self.api_reachable() {
             self.start_daemon();
+        } else {
+            // The daemon may have been started outside this app. Reflect the
+            // reachable API immediately while keeping ownership explicit so
+            // Stop only signals a child supervised by this process.
+            self.daemon_status = DaemonStatus::Running { pid: None };
         }
 
         self.refresh_overview(window, cx);
+        self.start_status_poll();
+    }
+
+    fn start_status_poll(&self) {
+        let tx = self.updates_tx.clone();
+        let client = self.services.client.clone();
+        let runtime = Arc::clone(&self.services.runtime);
+        runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                match load_overview(&client).await {
+                    Ok((health, sessions, agents, devices, ahp)) => {
+                        let _ = tx.send(UiUpdate::Overview {
+                            health,
+                            sessions,
+                            agents,
+                            devices,
+                            ahp,
+                        });
+                        let _ = tx.send(UiUpdate::Connection {
+                            status: ConnectionStatus::Online,
+                            detail: None,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(UiUpdate::Connection {
+                            status: ConnectionStatus::Offline,
+                            detail: Some(error.to_string()),
+                        });
+                    }
+                }
+            }
+        });
     }
 
     pub fn set_tab(&mut self, tab: AppTab, cx: &mut gpui::Context<Self>) {
@@ -261,12 +305,13 @@ impl AppState {
             let mut attempts = 0usize;
             loop {
                 match load_overview(&client).await {
-                    Ok((health, sessions, agents, devices)) => {
+                    Ok((health, sessions, agents, devices, ahp)) => {
                         let _ = tx.send(UiUpdate::Overview {
                             health,
                             sessions,
                             agents,
                             devices,
+                            ahp,
                         });
                         let _ = tx.send(UiUpdate::Connection {
                             status: ConnectionStatus::Online,
@@ -296,7 +341,12 @@ impl AppState {
         cx.notify();
     }
 
-    pub fn select_session(&mut self, session_id: String, _window: &mut Window, cx: &mut gpui::Context<Self>) {
+    pub fn select_session(
+        &mut self,
+        session_id: String,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.selected_session_id.as_ref() == Some(&session_id) {
             return;
         }
@@ -305,7 +355,12 @@ impl AppState {
         cx.notify();
     }
 
-    pub fn launch_session(&mut self, agent_id: String, _window: &mut Window, cx: &mut gpui::Context<Self>) {
+    pub fn launch_session(
+        &mut self,
+        agent_id: String,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let workspace = input_value(&self.workspace_input, cx);
         let cwd = input_value(&self.cwd_input, cx);
         let tx = self.updates_tx.clone();
@@ -316,7 +371,11 @@ impl AppState {
                 .create_session(
                     &agent_id,
                     workspace.clone(),
-                    if cwd.trim().is_empty() { None } else { Some(cwd) },
+                    if cwd.trim().is_empty() {
+                        None
+                    } else {
+                        Some(cwd)
+                    },
                     Vec::new(),
                 )
                 .await
@@ -339,6 +398,7 @@ impl AppState {
                         sessions: vec![session.clone()],
                         agents: Vec::new(),
                         devices: Vec::new(),
+                        ahp: AhpStatusSnapshot::default(),
                     });
                     let _ = tx.send(UiUpdate::SelectedSession(Some(session.id.to_string())));
                 }
@@ -358,7 +418,9 @@ impl AppState {
         if prompt.is_empty() {
             return;
         }
-        let _ = self.prompt_input.update(cx, |input, cx| input.set_value("", _window, cx));
+        let _ = self
+            .prompt_input
+            .update(cx, |input, cx| input.set_value("", _window, cx));
         let tx = self.updates_tx.clone();
         let client = self.services.client.clone();
         let runtime = Arc::clone(&self.services.runtime);
@@ -403,7 +465,12 @@ impl AppState {
         });
     }
 
-    pub fn revoke_device(&mut self, device_id: String, _window: &mut Window, _cx: &mut gpui::Context<Self>) {
+    pub fn revoke_device(
+        &mut self,
+        device_id: String,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) {
         let tx = self.updates_tx.clone();
         let client = self.services.client.clone();
         let runtime = Arc::clone(&self.services.runtime);
@@ -460,7 +527,11 @@ impl AppState {
                 env: Default::default(),
             })
             .collect();
-        if let Err(error) = self.services.zed.enable_for_agents(&agents, &self.services.daemon_binary) {
+        if let Err(error) = self
+            .services
+            .zed
+            .enable_for_agents(&agents, &self.services.daemon_binary)
+        {
             self.status_message = Some(error.to_string());
         }
         self.reload_zed_snapshot_sync();
@@ -480,8 +551,16 @@ impl AppState {
         self.reload_zed_snapshot_sync();
     }
 
-    pub fn create_session_from_inputs(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let Some(agent_id) = self.selected_agent_id.clone().or_else(|| self.agents.first().map(|agent| agent.id.clone())) else {
+    pub fn create_session_from_inputs(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(agent_id) = self
+            .selected_agent_id
+            .clone()
+            .or_else(|| self.agents.first().map(|agent| agent.id.clone()))
+        else {
             return;
         };
         let workspace = input_value(&self.workspace_input, cx);
@@ -490,14 +569,25 @@ impl AppState {
             return;
         }
         let cwd = input_value(&self.cwd_input, cx);
-        let cwd = if cwd.trim().is_empty() { None } else { Some(cwd) };
-        let _ = self.workspace_input.update(cx, |input, cx| input.set_value("", _window, cx));
-        let _ = self.cwd_input.update(cx, |input, cx| input.set_value("", _window, cx));
+        let cwd = if cwd.trim().is_empty() {
+            None
+        } else {
+            Some(cwd)
+        };
+        let _ = self
+            .workspace_input
+            .update(cx, |input, cx| input.set_value("", _window, cx));
+        let _ = self
+            .cwd_input
+            .update(cx, |input, cx| input.set_value("", _window, cx));
         let tx = self.updates_tx.clone();
         let client = self.services.client.clone();
         let runtime = Arc::clone(&self.services.runtime);
         runtime.spawn(async move {
-            match client.create_session(&agent_id, workspace, cwd, Vec::new()).await {
+            match client
+                .create_session(&agent_id, workspace, cwd, Vec::new())
+                .await
+            {
                 Ok(session) => {
                     let _ = tx.send(UiUpdate::SelectedSession(Some(session.id.to_string())));
                 }
@@ -546,6 +636,49 @@ impl AppState {
         }
     }
 
+    pub fn bind_ahp(
+        &mut self,
+        session_id: String,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        let tx = self.updates_tx.clone();
+        let client = self.services.client.clone();
+        let runtime = Arc::clone(&self.services.runtime);
+        runtime.spawn(async move {
+            match client.ahp_bind(&session_id).await {
+                Ok(()) => {
+                    let _ = tx.send(UiUpdate::Connection {
+                        status: ConnectionStatus::Online,
+                        detail: Some(format!("微信已绑定到 {}", session_id)),
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(UiUpdate::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
+    pub fn unbind_ahp(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) {
+        let tx = self.updates_tx.clone();
+        let client = self.services.client.clone();
+        let runtime = Arc::clone(&self.services.runtime);
+        runtime.spawn(async move {
+            match client.ahp_unbind().await {
+                Ok(()) => {
+                    let _ = tx.send(UiUpdate::Connection {
+                        status: ConnectionStatus::Online,
+                        detail: Some("微信绑定已解除".into()),
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(UiUpdate::Error(error.to_string()));
+                }
+            }
+        });
+    }
+
     fn spawn_selected_stream(&mut self, session_id: String) {
         if let Some(task) = self.selected_stream_task.take() {
             drop(task);
@@ -563,11 +696,15 @@ impl AppState {
                                 break;
                             };
                             let text = match message {
-                                tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
-                                tokio_tungstenite::tungstenite::Message::Binary(bytes) => match String::from_utf8(bytes.to_vec()) {
-                                    Ok(text) => text,
-                                    Err(_) => continue,
-                                },
+                                tokio_tungstenite::tungstenite::Message::Text(text) => {
+                                    text.to_string()
+                                }
+                                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                                    match String::from_utf8(bytes.to_vec()) {
+                                        Ok(text) => text,
+                                        Err(_) => continue,
+                                    }
+                                }
                                 _ => continue,
                             };
                             let value: serde_json::Value = match serde_json::from_str(&text) {
@@ -578,14 +715,19 @@ impl AppState {
                                 }
                             };
                             match GatewayClient::parse_remote_frame(value).await {
-                                Ok(RemoteFrame::Control(ServerMessage::Subscribed { snapshot, .. })) => {
+                                Ok(RemoteFrame::Control(ServerMessage::Subscribed {
+                                    snapshot,
+                                    ..
+                                })) => {
                                     after_seq = snapshot.session.last_seq;
                                     let _ = tx.send(UiUpdate::SessionSnapshot {
                                         session_id: session_id.clone(),
                                         snapshot,
                                     });
                                 }
-                                Ok(RemoteFrame::Control(ServerMessage::Error { message, .. })) => {
+                                Ok(RemoteFrame::Control(ServerMessage::Error {
+                                    message, ..
+                                })) => {
                                     let _ = tx.send(UiUpdate::Error(message));
                                 }
                                 Ok(RemoteFrame::Event(event)) => {
@@ -597,9 +739,13 @@ impl AppState {
                                     });
                                     if matches!(
                                         event_type.as_str(),
-                                        "session_status" | "session_completed" | "session_failed" | "session_update"
+                                        "session_status"
+                                            | "session_completed"
+                                            | "session_failed"
+                                            | "session_update"
                                     ) {
-                                        if let Ok(snapshot) = client.get_session(&session_id).await {
+                                        if let Ok(snapshot) = client.get_session(&session_id).await
+                                        {
                                             let _ = tx.send(UiUpdate::SessionSnapshot {
                                                 session_id: session_id.clone(),
                                                 snapshot,
@@ -630,19 +776,24 @@ impl AppState {
                 sessions,
                 agents,
                 devices,
+                ahp,
             } => {
+                let had_selected_session = self.selected_session_id.is_some();
                 self.health = Some(health);
                 self.sessions = sessions;
                 self.agents = agents;
                 self.devices = devices;
+                self.ahp_status = ahp;
                 self.connection = ConnectionStatus::Online;
                 if self.selected_agent_id.is_none() {
                     self.selected_agent_id = self.agents.first().map(|agent| agent.id.clone());
                 }
                 if self.selected_session_id.is_none() {
-                    self.selected_session_id = self.sessions.first().map(|session| session.id.to_string());
+                    self.selected_session_id =
+                        self.sessions.first().map(|session| session.id.to_string());
                 }
-                if let Some(session_id) = self.selected_session_id.clone() {
+                if !had_selected_session && let Some(session_id) = self.selected_session_id.clone()
+                {
                     self.spawn_selected_stream(session_id);
                 }
             }
@@ -663,13 +814,23 @@ impl AppState {
                 }
             }
             UiUpdate::Transcript { session_id, events } => {
-                self.session_events.entry(session_id.clone()).or_default().extend(events);
+                self.session_events
+                    .entry(session_id.clone())
+                    .or_default()
+                    .extend(events);
                 if self.selected_session_id.as_ref() == Some(&session_id) {
                     self.rebuild_selected_transcript();
                 }
             }
-            UiUpdate::SessionSnapshot { session_id, snapshot } => {
-                if let Some(existing) = self.sessions.iter_mut().find(|session| session.id.to_string() == session_id) {
+            UiUpdate::SessionSnapshot {
+                session_id,
+                snapshot,
+            } => {
+                if let Some(existing) = self
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id.to_string() == session_id)
+                {
                     *existing = snapshot.session.clone();
                 }
                 if self.selected_session_id.as_ref() == Some(&session_id) {
@@ -707,11 +868,19 @@ impl AppState {
             self.selected_transcript = Transcript::default();
             return;
         };
-        let events = self.session_events.get(&session_id).cloned().unwrap_or_default();
+        let events = self
+            .session_events
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
         let mut transcript = fold_transcript(&events);
         if let Some(snapshot) = self.selected_session_snapshot.as_ref() {
             for request in &snapshot.pending_permissions {
-                if !transcript.pending.iter().any(|candidate| candidate.id == request.id) {
+                if !transcript
+                    .pending
+                    .iter()
+                    .any(|candidate| candidate.id == request.id)
+                {
                     transcript.pending.push(request.clone());
                 }
             }
@@ -721,7 +890,10 @@ impl AppState {
 
     pub fn selected_session_view(&self) -> Option<SelectedSessionView> {
         let id = self.selected_session_id.as_ref()?;
-        let session = self.sessions.iter().find(|session| session.id.to_string() == *id)?;
+        let session = self
+            .sessions
+            .iter()
+            .find(|session| session.id.to_string() == *id)?;
         Some(SelectedSessionView {
             title: session.title.clone(),
             agent_name: session.agent_name.clone(),
@@ -776,7 +948,10 @@ impl AppState {
         };
         let mut parts = base.split(':');
         let host = parts.next().unwrap_or("127.0.0.1");
-        let port = parts.next().and_then(|value| value.parse::<u16>().ok()).unwrap_or(48100);
+        let port = parts
+            .next()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(48100);
         if host != "127.0.0.1" && host != "localhost" {
             return false;
         }
@@ -792,7 +967,9 @@ impl Render for AppState {
             AppTab::Machines => views::machines::render(self, window, cx).into_any_element(),
             AppTab::Agents => views::agents::render(self, window, cx).into_any_element(),
             AppTab::Devices => views::devices::render(self, window, cx).into_any_element(),
-            AppTab::Integrations => views::integrations::render(self, window, cx).into_any_element(),
+            AppTab::Integrations => {
+                views::integrations::render(self, window, cx).into_any_element()
+            }
             AppTab::Logs => render_logs(self).into_any_element(),
         };
 
@@ -815,8 +992,19 @@ impl Render for AppState {
                                 h_flex()
                                     .items_center()
                                     .justify_between()
-                                    .child(div().text_size(px(12.)).text_color(rgb(0x9ca3af)).child(self.status_message.clone().unwrap_or_else(|| "ready".to_owned())))
-                                    .child(div().text_size(px(12.)).text_color(rgb(0x9ca3af)).child(self.connection_label())),
+                                    .child(
+                                        div().text_size(px(12.)).text_color(rgb(0x9ca3af)).child(
+                                            self.status_message
+                                                .clone()
+                                                .unwrap_or_else(|| "ready".to_owned()),
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(rgb(0x9ca3af))
+                                            .child(self.connection_label()),
+                                    ),
                             ),
                     )
                     .child(content),
@@ -825,29 +1013,39 @@ impl Render for AppState {
 }
 
 fn render_logs(state: &AppState) -> impl IntoElement {
-    v_flex()
-        .flex_1()
-        .min_w_0()
-        .px_4()
-        .py_4()
-        .gap_2()
-        .children(state.logs.iter().map(|line| div().text_size(px(12.)).child(line.clone())))
+    v_flex().flex_1().min_w_0().px_4().py_4().gap_2().children(
+        state
+            .logs
+            .iter()
+            .map(|line| div().text_size(px(12.)).child(line.clone())),
+    )
 }
 
 fn input_value(input: &Entity<InputState>, cx: &gpui::Context<AppState>) -> String {
     input.read(cx).value().to_string()
 }
 
-fn load_health_only(client: &GatewayClient) -> impl std::future::Future<Output = Result<GatewayHealth>> + '_ {
+fn load_health_only(
+    client: &GatewayClient,
+) -> impl std::future::Future<Output = Result<GatewayHealth>> + '_ {
     async move { client.health().await }
 }
 
-async fn load_overview(client: &GatewayClient) -> Result<(GatewayHealth, Vec<AgentSession>, Vec<AgentSummary>, Vec<Device>)> {
+async fn load_overview(
+    client: &GatewayClient,
+) -> Result<(
+    GatewayHealth,
+    Vec<AgentSession>,
+    Vec<AgentSummary>,
+    Vec<Device>,
+    AhpStatusSnapshot,
+)> {
     let health = client.health().await?;
     let agents = client.list_agents().await?;
     let sessions = client.list_sessions().await?;
     let devices = client.list_devices().await?;
-    Ok((health, sessions, agents, devices))
+    let ahp = client.ahp_status().await.unwrap_or_default();
+    Ok((health, sessions, agents, devices, ahp))
 }
 
 fn home_dir() -> PathBuf {

@@ -100,10 +100,9 @@ args = ["-y", "@agentclientprotocol/codex-acp@latest"]
 
 Agent **必须显式配置**：Gateway 不会自动扫描本机可执行文件。
 
-macOS 的 `app/` 是一个小型状态栏 companion。状态栏启动时会自动启动同目录里的 CLI 守护进程，
-点击 **Copy Zed agent_servers** 复制 Zed 配置；配置生成和校验都复用 Rust CLI，不会再维护一套
-独立的 GPUI 页面。开发源码时可以点击 **Choose gateway project…** 选择包含 workspace
-`Cargo.toml` 的目录；选择会保存到 `~/Library/Application Support/Agent Gateway/`。
+macOS 的 `app/` 是一个桌面控制台。窗口底部状态区会根据真实状态显示
+**▶ Start gateway / Stop gateway**，并展示当前项目、Session 标题、通道在线状态、微信绑定和二维码。
+Sessions、Devices、Integrations 页面复用同一套本地 HTTP API，切换微信绑定或扫描二维码后会自动刷新。
 
 App bundle 内有两个 CLI：`agent-gateway` 是 Zed 调用的 bundle wrapper，
 `agent-gateway-daemon` 是状态栏启动的 web-enabled daemon；二者都直接链接同一个

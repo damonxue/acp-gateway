@@ -9,7 +9,10 @@ pub mod machines;
 pub mod sessions;
 pub mod sidebar;
 
-use gpui::{AnyElement, Div, Hsla, IntoElement, ParentElement, SharedString, Styled, div, px, rgb, prelude::FluentBuilder as _};
+use gpui::{
+    AnyElement, Div, Hsla, IntoElement, ParentElement, SharedString, Styled, div,
+    prelude::FluentBuilder as _, px, rgb,
+};
 use gpui_component::StyledExt;
 
 pub(crate) fn h_flex() -> Div {
@@ -20,7 +23,10 @@ pub(crate) fn v_flex() -> Div {
     div().v_flex()
 }
 
-pub(crate) fn section_header(title: impl Into<SharedString>, detail: Option<impl Into<SharedString>>) -> AnyElement {
+pub(crate) fn section_header(
+    title: impl Into<SharedString>,
+    detail: Option<impl Into<SharedString>>,
+) -> AnyElement {
     let title = title.into();
     let detail = detail.map(Into::into);
     div()
@@ -37,7 +43,14 @@ pub(crate) fn section_header(title: impl Into<SharedString>, detail: Option<impl
                 .justify_between()
                 .gap_3()
                 .child(div().text_size(gpui::px(16.)).child(title))
-                .when_some(detail, |this, detail| this.child(div().text_size(gpui::px(12.)).text_color(rgb(0x9ca3af)).child(detail))),
+                .when_some(detail, |this, detail| {
+                    this.child(
+                        div()
+                            .text_size(gpui::px(12.))
+                            .text_color(rgb(0x9ca3af))
+                            .child(detail),
+                    )
+                }),
         )
         .into_any_element()
 }

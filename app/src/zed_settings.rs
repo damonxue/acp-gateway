@@ -114,7 +114,11 @@ impl ZedSettingsManager {
         })
     }
 
-    pub fn enable_for_agents(&self, agents: &[AgentDescriptor], bridge_command: &Path) -> Result<()> {
+    pub fn enable_for_agents(
+        &self,
+        agents: &[AgentDescriptor],
+        bridge_command: &Path,
+    ) -> Result<()> {
         self.ensure_backup()?;
         let text = self.read_settings_text()?;
         let mut record = self.read_record().unwrap_or_default();
@@ -132,7 +136,11 @@ impl ZedSettingsManager {
             let spec = ZedAgentServerSpec {
                 key: key.clone(),
                 command: bridge_command.to_string_lossy().to_string(),
-                args: vec!["acp-bridge".to_owned(), "--agent".to_owned(), agent.id.to_string()],
+                args: vec![
+                    "acp-bridge".to_owned(),
+                    "--agent".to_owned(),
+                    agent.id.to_string(),
+                ],
                 env: BTreeMap::new(),
             };
             self.upsert_agent_server(&agent_servers, &key, &spec, &mut record)?;
@@ -157,9 +165,7 @@ impl ZedSettingsManager {
         let Some(agent_servers_prop) = root_obj.get("agent_servers") else {
             return Ok(());
         };
-        let Some(agent_servers) = agent_servers_prop
-            .value()
-            .and_then(|node| node.as_object())
+        let Some(agent_servers) = agent_servers_prop.value().and_then(|node| node.as_object())
         else {
             return Ok(());
         };
@@ -213,7 +219,9 @@ impl ZedSettingsManager {
             fs::create_dir_all(parent)
                 .with_context(|| format!("cannot create {}", parent.display()))?;
         }
-        let text = self.read_settings_text().unwrap_or_else(|_| "{}\n".to_owned());
+        let text = self
+            .read_settings_text()
+            .unwrap_or_else(|_| "{}\n".to_owned());
         fs::write(&self.backup_path, text)
             .with_context(|| format!("cannot write {}", self.backup_path.display()))?;
         Ok(())
@@ -288,10 +296,14 @@ impl ZedSettingsManager {
 }
 
 fn parse_snapshot(text: &str) -> Result<Vec<ZedAgentServerSummary>> {
-    let value: serde_json::Value = jsonc_parser::parse_to_serde_value(text, &ParseOptions::default())
-        .context("cannot parse settings.json as JSONC")?;
+    let value: serde_json::Value =
+        jsonc_parser::parse_to_serde_value(text, &ParseOptions::default())
+            .context("cannot parse settings.json as JSONC")?;
     let mut items = Vec::new();
-    let Some(agent_servers) = value.get("agent_servers").and_then(|value| value.as_object()) else {
+    let Some(agent_servers) = value
+        .get("agent_servers")
+        .and_then(|value| value.as_object())
+    else {
         return Ok(items);
     };
 
@@ -318,7 +330,9 @@ fn parse_snapshot(text: &str) -> Result<Vec<ZedAgentServerSummary>> {
         if let Some(env) = value.get("env").and_then(|value| value.as_object()) {
             summary.env = env
                 .iter()
-                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                })
                 .collect();
         }
         items.push(summary);
@@ -352,7 +366,10 @@ fn agent_server_spec_to_cst(spec: ZedAgentServerSpec) -> CstInputValue {
         .collect::<Vec<_>>();
 
     CstInputValue::Object(vec![
-        ("type".to_owned(), CstInputValue::String("custom".to_owned())),
+        (
+            "type".to_owned(),
+            CstInputValue::String("custom".to_owned()),
+        ),
         ("command".to_owned(), CstInputValue::String(spec.command)),
         (
             "args".to_owned(),
@@ -523,6 +540,9 @@ mod tests {
         let snapshot = manager.snapshot().unwrap();
         assert!(!snapshot.enabled);
         assert_eq!(snapshot.agent_servers.len(), 1);
-        assert_eq!(snapshot.agent_servers[0].command.as_deref(), Some("/bin/original"));
+        assert_eq!(
+            snapshot.agent_servers[0].command.as_deref(),
+            Some("/bin/original")
+        );
     }
 }

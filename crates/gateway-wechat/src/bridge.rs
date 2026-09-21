@@ -129,7 +129,10 @@ where
                         &binding.binding_id,
                         &message.message_id,
                         OutboundRole::Agent,
-                        &reply,
+                        &format_channel_message(
+                            &self.message_context(&binding.session_id).await,
+                            &reply,
+                        ),
                         context.as_deref(),
                     )
                     .await?;
@@ -263,6 +266,7 @@ where
         answer: &mut String,
     ) -> Result<(), BridgeError> {
         let binding = self.binding.read().await.clone();
+        let context_header = self.message_context(&binding.session_id).await;
         match event.event_type.as_str() {
             "user_message" => {
                 let text = content_text(event.payload.get("content"));
@@ -275,7 +279,7 @@ where
                             &binding.binding_id,
                             &event.id.to_string(),
                             OutboundRole::VsCodeUser,
-                            &text,
+                            &format_channel_message(&context_header, &text),
                             context.as_deref(),
                         )
                         .await?;
@@ -300,7 +304,7 @@ where
                             &binding.binding_id,
                             &event.id.to_string(),
                             OutboundRole::Agent,
-                            &text,
+                            &format_channel_message(&context_header, &text),
                             context.as_deref(),
                         )
                         .await?;
@@ -322,7 +326,7 @@ where
                             &binding.binding_id,
                             &event.id.to_string(),
                             OutboundRole::Agent,
-                            &text,
+                            &format_channel_message(&context_header, &text),
                             context.as_deref(),
                         )
                         .await?;
@@ -333,6 +337,28 @@ where
         }
         Ok(())
     }
+
+    async fn message_context(&self, session_id: &SessionId) -> String {
+        let Ok(snapshot) = self.manager.get_snapshot(session_id).await else {
+            return format!("Session: {session_id}");
+        };
+        let title = snapshot
+            .session
+            .title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or("未命名会话");
+        format!(
+            "项目: {} | 标题: {} | Session: {}",
+            snapshot.session.workspace.display(),
+            title,
+            snapshot.session.id
+        )
+    }
+}
+
+fn format_channel_message(context: &str, text: &str) -> String {
+    format!("【Agent Gateway · {context}】\n{text}")
 }
 
 fn format_session_line(
@@ -383,7 +409,7 @@ fn is_idle_update(payload: &serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_idle_update;
+    use super::{format_channel_message, is_idle_update};
 
     #[test]
     fn recognizes_codex_idle_turn_metadata() {
@@ -393,5 +419,16 @@ mod tests {
         assert!(!is_idle_update(&serde_json::json!({
             "_meta": {"codex": {"threadStatus": {"type": "active"}}}
         })));
+    }
+
+    #[test]
+    fn channel_messages_carry_project_and_title_context() {
+        let message = format_channel_message(
+            "项目: /work/demo | 标题: 修复登录 | Session: sess_1",
+            "已完成",
+        );
+        assert!(message.contains("/work/demo"));
+        assert!(message.contains("修复登录"));
+        assert!(message.ends_with("\n已完成"));
     }
 }

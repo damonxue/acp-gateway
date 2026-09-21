@@ -29,7 +29,10 @@ pub fn spawn_supervisor(
         let _ = ui_tx.send(crate::state::UiUpdate::Daemon(DaemonStatus::Starting));
 
         let mut command = Command::new(&config.binary);
-        command.arg("run").stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .arg("run")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -42,7 +45,9 @@ pub fn spawn_supervisor(
         };
 
         let pid = child.id();
-        let _ = ui_tx.send(crate::state::UiUpdate::Daemon(DaemonStatus::Running { pid }));
+        let _ = ui_tx.send(crate::state::UiUpdate::Daemon(DaemonStatus::Running {
+            pid,
+        }));
 
         if let Some(stdout) = child.stdout.take() {
             let tx = ui_tx.clone();
@@ -59,7 +64,9 @@ pub fn spawn_supervisor(
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx.send(crate::state::UiUpdate::DaemonLog(format!("[stderr] {line}")));
+                    let _ = tx.send(crate::state::UiUpdate::DaemonLog(format!(
+                        "[stderr] {line}"
+                    )));
                 }
             });
         }

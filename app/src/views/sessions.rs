@@ -1,4 +1,7 @@
-use gpui::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div, px, rgb, prelude::FluentBuilder as _};
+use gpui::{
+    AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window, div,
+    prelude::FluentBuilder as _, px, rgb,
+};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement;
@@ -34,13 +37,7 @@ pub fn render(state: &mut AppState, window: &mut Window, cx: &mut Context<AppSta
                         .child(h_flex().gap_2().child(refresh_button(cx))),
                 ),
         )
-        .child(
-            h_flex()
-                .flex_1()
-                .min_h_0()
-                .child(left)
-                .child(right),
-        )
+        .child(h_flex().flex_1().min_h_0().child(left).child(right))
         .into_any_element()
 }
 
@@ -53,7 +50,11 @@ fn refresh_button(cx: &mut Context<AppState>) -> AnyElement {
         .into_any_element()
 }
 
-fn render_session_list(state: &mut AppState, window: &mut Window, cx: &mut Context<AppState>) -> AnyElement {
+fn render_session_list(
+    state: &mut AppState,
+    window: &mut Window,
+    cx: &mut Context<AppState>,
+) -> AnyElement {
     let create = cx.listener(|state, _, window, cx| state.create_session_from_inputs(window, cx));
     let selected_agent_id = state.selected_agent_id.clone();
     let selected_session_id = state.selected_session_id.clone();
@@ -100,8 +101,18 @@ fn render_session_list(state: &mut AppState, window: &mut Window, cx: &mut Conte
                     v_flex()
                         .gap_3()
                         .child(div().text_size(px(14.)).child("New session"))
-                        .child(Input::new(&state.workspace_input).appearance(true).bordered(true).cleanable(false))
-                        .child(Input::new(&state.cwd_input).appearance(true).bordered(true).cleanable(false))
+                        .child(
+                            Input::new(&state.workspace_input)
+                                .appearance(true)
+                                .bordered(true)
+                                .cleanable(false),
+                        )
+                        .child(
+                            Input::new(&state.cwd_input)
+                                .appearance(true)
+                                .bordered(true)
+                                .cleanable(false),
+                        )
                         .child(h_flex().gap_2().flex_wrap().children(agent_buttons))
                         .child(
                             Button::new("create-session")
@@ -139,7 +150,11 @@ fn session_row(session: AgentSession, selected: bool, cx: &mut Context<AppState>
         .into_any_element()
 }
 
-fn render_session_detail(state: &mut AppState, window: &mut Window, cx: &mut Context<AppState>) -> AnyElement {
+fn render_session_detail(
+    state: &mut AppState,
+    window: &mut Window,
+    cx: &mut Context<AppState>,
+) -> AnyElement {
     let Some(session) = state.selected_session_view() else {
         return v_flex()
             .flex_1()
@@ -147,7 +162,12 @@ fn render_session_detail(state: &mut AppState, window: &mut Window, cx: &mut Con
             .min_h_0()
             .items_center()
             .justify_center()
-            .child(div().text_size(px(14.)).text_color(rgb(0x9ca3af)).child("Pick a session to inspect its transcript."))
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .text_color(rgb(0x9ca3af))
+                    .child("Pick a session to inspect its transcript."),
+            )
             .into_any_element();
     };
 
@@ -175,8 +195,17 @@ fn render_session_detail(state: &mut AppState, window: &mut Window, cx: &mut Con
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(div().text_size(px(16.)).child(session.title.unwrap_or(session.agent_name)))
-                                .child(div().text_size(px(12.)).text_color(rgb(0x9ca3af)).child(session.workspace)),
+                                .child(
+                                    div()
+                                        .text_size(px(16.))
+                                        .child(session.title.unwrap_or(session.agent_name)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(0x9ca3af))
+                                        .child(session.workspace),
+                                ),
                         )
                         .child(
                             h_flex()
@@ -211,7 +240,12 @@ fn render_session_detail(state: &mut AppState, window: &mut Window, cx: &mut Con
                     h_flex()
                         .gap_2()
                         .items_end()
-                        .child(Input::new(&state.prompt_input).appearance(true).bordered(true).h(px(96.)))
+                        .child(
+                            Input::new(&state.prompt_input)
+                                .appearance(true)
+                                .bordered(true)
+                                .h(px(96.)),
+                        )
                         .child(
                             Button::new("send-prompt")
                                 .with_size(Size::Small)
@@ -237,16 +271,31 @@ fn render_transcript(
         .py_4()
         .gap_3()
         .children(transcript.items.into_iter().map(render_item))
-        .children(pending.into_iter().map(|request| render_pending_request(request, cx)))
+        .children(
+            pending
+                .into_iter()
+                .map(|request| render_pending_request(request, cx)),
+        )
         .into_any_element()
 }
 
 fn render_item(item: TranscriptItem) -> AnyElement {
     match item {
-        TranscriptItem::User { text, .. } => bubble("User", text, rgb(0x1d4ed8).into(), rgb(0xe0f2fe).into()),
-        TranscriptItem::Agent { text, .. } => bubble("Agent", text, rgb(0x1f2937).into(), rgb(0xf3f4f6).into()),
-        TranscriptItem::Thought { text, .. } => bubble("Thought", text, rgb(0x312e81).into(), rgb(0xe0e7ff).into()),
-        TranscriptItem::Tool { title, status, output, .. } => v_flex()
+        TranscriptItem::User { text, .. } => {
+            bubble("User", text, rgb(0x1d4ed8).into(), rgb(0xe0f2fe).into())
+        }
+        TranscriptItem::Agent { text, .. } => {
+            bubble("Agent", text, rgb(0x1f2937).into(), rgb(0xf3f4f6).into())
+        }
+        TranscriptItem::Thought { text, .. } => {
+            bubble("Thought", text, rgb(0x312e81).into(), rgb(0xe0e7ff).into())
+        }
+        TranscriptItem::Tool {
+            title,
+            status,
+            output,
+            ..
+        } => v_flex()
             .gap_2()
             .px_3()
             .py_3()
@@ -261,20 +310,37 @@ fn render_item(item: TranscriptItem) -> AnyElement {
             .py_3()
             .border_1()
             .border_color(rgb(0x374151))
-            .child(div().text_size(px(12.)).text_color(rgb(0x9ca3af)).child(stream))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(0x9ca3af))
+                    .child(stream),
+            )
             .child(div().child(text))
             .into_any_element(),
-        TranscriptItem::Permission { request, answer, .. } => v_flex()
+        TranscriptItem::Permission {
+            request, answer, ..
+        } => v_flex()
             .gap_2()
             .px_3()
             .py_3()
             .border_1()
             .border_color(rgb(0x92400e))
             .bg(rgb(0x451a03))
-            .child(div().child(format!("Permission: {}", request.title.unwrap_or_else(|| "tool call".to_owned()))))
-            .child(div().text_size(px(12.)).text_color(rgb(0xfbbf24)).child(answer.unwrap_or_else(|| "pending".to_owned())))
+            .child(div().child(format!(
+                "Permission: {}",
+                request.title.unwrap_or_else(|| "tool call".to_owned())
+            )))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(0xfbbf24))
+                    .child(answer.unwrap_or_else(|| "pending".to_owned())),
+            )
             .into_any_element(),
-        TranscriptItem::Notice { text, .. } => bubble("Notice", text, rgb(0x374151).into(), rgb(0xf3f4f6).into()),
+        TranscriptItem::Notice { text, .. } => {
+            bubble("Notice", text, rgb(0x374151).into(), rgb(0xf3f4f6).into())
+        }
     }
 }
 
@@ -288,9 +354,21 @@ fn render_pending_request(request: PermissionRequest, cx: &mut Context<AppState>
         .border_1()
         .border_color(rgb(0xb45309))
         .bg(rgb(0x451a03))
-        .child(div().text_size(px(12.)).text_color(rgb(0xf59e0b)).child("Permission required"))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(0xf59e0b))
+                .child("Permission required"),
+        )
         .child(div().child(request.title.unwrap_or_else(|| "tool call".to_owned())))
-        .when_some(command, |this, command| this.child(div().text_size(px(12.)).text_color(rgb(0xfcd34d)).child(command)))
+        .when_some(command, |this, command| {
+            this.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(0xfcd34d))
+                    .child(command),
+            )
+        })
         .child(
             h_flex()
                 .gap_2()
@@ -316,18 +394,38 @@ fn render_pending_request(request: PermissionRequest, cx: &mut Context<AppState>
                 }))
                 .when(request.options.is_empty(), |this| {
                     this.children([
-                        Button::new("deny").with_size(Size::Small).danger().label("Deny").on_click(cx.listener({
-                            let request_id = request_id.clone();
-                            move |state, _, window, cx| {
-                                state.answer_permission(request_id.clone(), None, false, window, cx);
-                            }
-                        })),
-                        Button::new("allow").with_size(Size::Small).primary().label("Allow").on_click(cx.listener({
-                            let request_id = request_id.clone();
-                            move |state, _, window, cx| {
-                                state.answer_permission(request_id.clone(), None, true, window, cx);
-                            }
-                        })),
+                        Button::new("deny")
+                            .with_size(Size::Small)
+                            .danger()
+                            .label("Deny")
+                            .on_click(cx.listener({
+                                let request_id = request_id.clone();
+                                move |state, _, window, cx| {
+                                    state.answer_permission(
+                                        request_id.clone(),
+                                        None,
+                                        false,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            })),
+                        Button::new("allow")
+                            .with_size(Size::Small)
+                            .primary()
+                            .label("Allow")
+                            .on_click(cx.listener({
+                                let request_id = request_id.clone();
+                                move |state, _, window, cx| {
+                                    state.answer_permission(
+                                        request_id.clone(),
+                                        None,
+                                        true,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            })),
                     ])
                 }),
         )

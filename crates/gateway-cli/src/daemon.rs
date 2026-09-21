@@ -85,16 +85,35 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
         .is_enabled()
         .then(|| tokio::spawn(auto_bind_wechat(Arc::clone(&manager), Arc::clone(&wechat))));
 
+    let mut health_sources: Vec<Arc<dyn HealthSource>> = vec![
+        Arc::new(TunnelHealth(Arc::clone(&tunnel))) as Arc<dyn HealthSource>,
+        Arc::new(RelayHealth(Arc::clone(&relay))) as Arc<dyn HealthSource>,
+        Arc::new(AhpHealth(Arc::clone(&ahp))) as Arc<dyn HealthSource>,
+        Arc::new(WechatHealth(Arc::clone(&wechat))) as Arc<dyn HealthSource>,
+    ];
+    if config.lark.as_ref().is_some_and(|section| section.enabled) {
+        health_sources.push(Arc::new(ConfiguredHealth {
+            name: "lark",
+            state: "configured",
+        }));
+    }
+    if config
+        .telegram
+        .as_ref()
+        .is_some_and(|section| section.enabled)
+    {
+        health_sources.push(Arc::new(ConfiguredHealth {
+            name: "telegram",
+            state: "configured",
+        }));
+    }
+
     let state = AppState::new(
         Arc::clone(&manager),
         Arc::clone(&auth),
         machine.clone(),
         config.security.trust_loopback,
-        vec![
-            Arc::new(TunnelHealth(Arc::clone(&tunnel))) as Arc<dyn HealthSource>,
-            Arc::new(RelayHealth(Arc::clone(&relay))) as Arc<dyn HealthSource>,
-            Arc::new(AhpHealth(Arc::clone(&ahp))) as Arc<dyn HealthSource>,
-        ],
+        health_sources,
     )
     .with_ahp(Arc::clone(&ahp));
 
@@ -449,6 +468,40 @@ impl HealthSource for AhpHealth {
             name: "ahp".to_owned(),
             state: status.state_name().to_owned(),
             detail: status.detail(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WechatHealth(Arc<WechatSupervisor>);
+
+impl HealthSource for WechatHealth {
+    fn health(&self) -> ComponentHealth {
+        ComponentHealth {
+            name: "wechat".to_owned(),
+            state: if self.0.is_enabled() {
+                "up"
+            } else {
+                "disabled"
+            }
+            .to_owned(),
+            detail: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ConfiguredHealth {
+    name: &'static str,
+    state: &'static str,
+}
+
+impl HealthSource for ConfiguredHealth {
+    fn health(&self) -> ComponentHealth {
+        ComponentHealth {
+            name: self.name.to_owned(),
+            state: self.state.to_owned(),
+            detail: Some("webhook/token adapter".to_owned()),
         }
     }
 }
