@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use gateway_core::SessionId;
 use gateway_core::SessionManager;
@@ -18,6 +18,7 @@ use crate::types::Credentials;
 pub struct WechatSupervisor {
     cancel: CancellationToken,
     rebind_tx: Option<mpsc::Sender<SessionId>>,
+    binding_session: Option<Arc<RwLock<SessionId>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -25,6 +26,13 @@ impl WechatSupervisor {
     #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.rebind_tx.is_some()
+    }
+
+    /// Current session shown by the local health/UI surface.
+    pub fn binding_session_id(&self) -> Option<String> {
+        self.binding_session
+            .as_ref()
+            .and_then(|session| session.read().ok().map(|session| session.to_string()))
     }
 
     pub fn start<A, J>(
@@ -81,11 +89,16 @@ impl WechatSupervisor {
                 }
             }
         });
-        let (rebind_tx, mut rebind_rx) = mpsc::channel(16);
+        let binding_session = Arc::new(RwLock::new(binding.session_id.clone()));
+        let (rebind_tx, mut rebind_rx) = mpsc::channel::<SessionId>(16);
         let rebind_bridge = Arc::clone(&bridge);
+        let rebind_session = Arc::clone(&binding_session);
         let rebind_task = tokio::spawn(async move {
             while let Some(session_id) = rebind_rx.recv().await {
-                rebind_bridge.rebind(session_id).await;
+                rebind_bridge.rebind(session_id.clone()).await;
+                if let Ok(mut current) = rebind_session.write() {
+                    *current = session_id;
+                }
             }
         });
         let poller = Poller::new(
@@ -117,6 +130,7 @@ impl WechatSupervisor {
         Self {
             cancel,
             rebind_tx: Some(rebind_tx),
+            binding_session: Some(binding_session),
             tasks: Mutex::new(vec![bridge_task, poller_task, rebind_task]),
         }
     }
@@ -137,6 +151,7 @@ impl WechatSupervisor {
         Self {
             cancel: CancellationToken::new(),
             rebind_tx: None,
+            binding_session: None,
             tasks: Mutex::new(Vec::new()),
         }
     }

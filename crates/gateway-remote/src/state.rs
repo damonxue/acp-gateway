@@ -8,6 +8,7 @@ use axum::http::request::Parts;
 use gateway_ahp::AhpSupervisor;
 use gateway_auth::AuthService;
 use gateway_core::error::{GatewayError, Result};
+use gateway_core::ids::SessionId;
 use gateway_core::machine::Machine;
 use gateway_core::manager::SessionManager;
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,16 @@ pub trait HealthSource: Send + Sync + std::fmt::Debug {
     fn health(&self) -> ComponentHealth;
 }
 
+/// A local channel that can switch its active Gateway session.
+#[async_trait::async_trait]
+pub trait SessionBinder: Send + Sync + std::fmt::Debug {
+    /// Bind the channel to an existing session.
+    async fn bind(&self, session_id: SessionId) -> std::result::Result<(), String>;
+
+    /// Remove the active binding while retaining channel credentials.
+    async fn unbind(&self) -> std::result::Result<(), String>;
+}
+
 /// Everything the HTTP and WebSocket layers need.
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -50,6 +61,7 @@ struct Inner {
     trust_loopback: bool,
     health_sources: Vec<Arc<dyn HealthSource>>,
     ahp: Option<Arc<AhpSupervisor>>,
+    wechat_binder: Option<Arc<dyn SessionBinder>>,
 }
 
 impl AppState {
@@ -70,6 +82,7 @@ impl AppState {
                 trust_loopback,
                 health_sources,
                 ahp: None,
+                wechat_binder: None,
             }),
         }
     }
@@ -128,6 +141,21 @@ impl AppState {
     #[must_use]
     pub fn ahp(&self) -> Option<&Arc<AhpSupervisor>> {
         self.inner.ahp.as_ref()
+    }
+
+    /// Attach the local WeChat binding adapter after the base state is built.
+    #[must_use]
+    pub fn with_wechat_binder(mut self, binder: Arc<dyn SessionBinder>) -> Self {
+        let inner = Arc::get_mut(&mut self.inner)
+            .expect("WeChat binder must be attached before cloning AppState");
+        inner.wechat_binder = Some(binder);
+        self
+    }
+
+    /// Configured local WeChat session binder, if any.
+    #[must_use]
+    pub fn wechat_binder(&self) -> Option<&Arc<dyn SessionBinder>> {
+        self.inner.wechat_binder.as_ref()
     }
 }
 

@@ -102,11 +102,13 @@ ad-hoc signed, so on another Mac: `xattr -dr com.apple.quarantine "/Applications
 `MACOS_SIGNING_KEY` (and `APPLE_NOTARIZATION_*`) and pass `--sign` for a distributable
 build.
 
-The optional `app/` target is a macOS desktop control panel. Its lower status
-area exposes a state-driven Start/Stop gateway control, the selected project's
-session title and workspace, channel health, WeChat binding, and QR pairing
-state. The Sessions, Devices and Integrations views use the same local HTTP API
-as the CLI, so changing a binding or scanning a QR code takes effect immediately.
+The optional `app/` target is a small native macOS menu bar companion built with
+Cocoa/AppKit (`cocoa` and `objc`), without GPUI or a document window. Opening its
+status item refreshes the live gateway state and `/sessions` data, exposes
+state-driven Start/Stop control, and lets you inspect each session's title,
+project, working directory, agent, origin and status. It also shows WeChat,
+Lark and Telegram health, displays available WeChat or phone pairing QR codes,
+and switches the WeChat binding through the running Gateway CLI supervisor.
 
 The App bundle contains two CLI binaries: `agent-gateway` is the bundle-local
 wrapper that Zed invokes, and `agent-gateway-daemon` is the web-enabled daemon

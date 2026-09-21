@@ -47,6 +47,11 @@ pub trait Journal: Send + Sync {
     async fn cursor(&self, binding_id: &str) -> Result<String, JournalError>;
     async fn set_cursor(&self, binding_id: &str, cursor: &str) -> Result<(), JournalError>;
 
+    /// Return the most recently received reply context for this binding.
+    /// Weixin requires that context for every outbound message, including a
+    /// startup notification after a daemon restart.
+    async fn latest_context_token(&self, binding_id: &str) -> Result<Option<String>, JournalError>;
+
     /// Persist the inbox record and cursor as one logical operation. Returns
     /// false when the stable message id was already committed.
     async fn commit_inbound(
@@ -121,6 +126,18 @@ impl Journal for SqliteJournal {
         .execute(&self.pool)
         .await
         .map(|_| ())
+        .map_err(|error| JournalError::Operation(error.to_string()))
+    }
+
+    async fn latest_context_token(&self, binding_id: &str) -> Result<Option<String>, JournalError> {
+        sqlx::query_scalar(
+            "SELECT context_token FROM wechat_inbox
+             WHERE binding_id=? AND context_token <> ''
+             ORDER BY received_at DESC LIMIT 1",
+        )
+        .bind(binding_id)
+        .fetch_optional(&self.pool)
+        .await
         .map_err(|error| JournalError::Operation(error.to_string()))
     }
 
@@ -325,6 +342,19 @@ impl Journal for MemoryJournal {
             .lock()
             .map_err(|_| JournalError::Unavailable("journal lock poisoned".into()))?;
         Ok(state.cursors.get(binding_id).cloned().unwrap_or_default())
+    }
+
+    async fn latest_context_token(&self, binding_id: &str) -> Result<Option<String>, JournalError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| JournalError::Unavailable("journal lock poisoned".into()))?;
+        Ok(state
+            .inbox
+            .values()
+            .filter(|record| record.binding_id == binding_id)
+            .max_by_key(|record| record.received_at)
+            .map(|record| record.message.context_token.clone()))
     }
 
     async fn commit_inbound(

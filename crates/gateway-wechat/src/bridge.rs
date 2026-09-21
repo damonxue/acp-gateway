@@ -38,6 +38,7 @@ pub struct WechatBridge<A, J> {
     binding: Arc<RwLock<Binding>>,
     credentials: Credentials,
     outbound: OutboundSender<A, J>,
+    journal: Arc<J>,
     context_token: Arc<RwLock<Option<String>>>,
     cancel: CancellationToken,
     rebind_notify: Arc<Notify>,
@@ -84,6 +85,7 @@ where
             credentials,
             outbound: OutboundSender::new(api, Arc::clone(&journal))
                 .with_limits(max_text_bytes, max_chunk_bytes),
+            journal,
             context_token: Arc::new(RwLock::new(None)),
             cancel,
             rebind_notify: Arc::new(Notify::new()),
@@ -222,6 +224,7 @@ where
     /// user messages and completed agent text. Thoughts, tools, permissions and
     /// partial progress are intentionally excluded.
     pub async fn run(self: Arc<Self>) -> Result<(), BridgeError> {
+        self.send_startup_message().await?;
         loop {
             let session_id = self.binding.read().await.session_id.clone();
             let mut subscription = match self.manager.subscribe(&session_id) {
@@ -258,6 +261,45 @@ where
                 self.handle_event(&event, &mut answer).await?;
             }
         }
+    }
+
+    /// Announce every daemon start to the bound WeChat conversation. A
+    /// context token is persisted by the inbox journal, so restarts can send
+    /// immediately without requiring the user to type a new message first.
+    /// On a first-ever bind there is no legal Weixin context yet; the
+    /// notification is durably queued and is flushed with the first inbound
+    /// message by `OutboundSender`.
+    async fn send_startup_message(&self) -> Result<(), BridgeError> {
+        let binding = self.binding.read().await.clone();
+        if let Some(context) = self
+            .journal
+            .latest_context_token(&binding.binding_id)
+            .await?
+        {
+            *self.context_token.write().await = Some(context);
+        }
+        let context = self.context_token.read().await.clone();
+        let text = format_channel_message(
+            &self.message_context(&binding.session_id).await,
+            "Agent Gateway 已启动，微信通道已连接。",
+        );
+        let source_id = format!(
+            "gateway-start-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let result = self
+            .outbound
+            .send_text(
+                &self.credentials,
+                &binding.binding_id,
+                &source_id,
+                OutboundRole::Agent,
+                &text,
+                context.as_deref(),
+            )
+            .await?;
+        tracing::info!(?result, session_id = %binding.session_id, "sent WeChat gateway startup notification");
+        Ok(())
     }
 
     async fn handle_event(

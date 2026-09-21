@@ -59,6 +59,8 @@ pub fn router(state: AppState) -> Router {
         .route("/ahp/status", get(ahp_status))
         .route("/ahp/bind", post(ahp_bind))
         .route("/ahp/unbind", post(ahp_unbind))
+        .route("/wechat/bind", post(wechat_bind))
+        .route("/wechat/unbind", post(wechat_unbind))
         .route(gateway_core::bridge::BRIDGE_PATH, get(bridge::socket))
         .route("/pairing/begin", post(begin_pairing))
         .route("/devices", get(list_devices))
@@ -71,6 +73,7 @@ pub fn router(state: AppState) -> Router {
 pub struct Health {
     status: &'static str,
     version: &'static str,
+    pid: u32,
     machine: Machine,
     sessions: SessionCounts,
     components: Vec<ComponentHealth>,
@@ -86,6 +89,7 @@ async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
+        pid: std::process::id(),
         machine: state.machine(),
         sessions: SessionCounts {
             active: state.manager().active_count(),
@@ -132,6 +136,38 @@ async fn ahp_unbind(access: Access, State(state): State<AppState>) -> ApiResult<
         .ahp()
         .ok_or_else(|| GatewayError::invalid_request("AHP is not configured"))?;
     ahp.unbind().await.map_err(GatewayError::transport)?;
+    Ok(Json(serde_json::json!({ "unbound": true })))
+}
+
+/// `POST /wechat/bind` — switch whichever local WeChat adapter is active.
+async fn wechat_bind(
+    access: Access,
+    State(state): State<AppState>,
+    Json(body): Json<AhpBindBody>,
+) -> ApiResult<serde_json::Value> {
+    access.require_local()?;
+    let session_id = SessionId::new(body.session_id);
+    state.manager().get_session(&session_id).await?;
+    let binder = state
+        .wechat_binder()
+        .ok_or_else(|| GatewayError::invalid_request("WeChat adapter is not configured"))?;
+    binder
+        .bind(session_id)
+        .await
+        .map_err(GatewayError::transport)?;
+    Ok(Json(serde_json::json!({ "bound": true })))
+}
+
+/// `POST /wechat/unbind` — detach the local WeChat adapter.
+async fn wechat_unbind(
+    access: Access,
+    State(state): State<AppState>,
+) -> ApiResult<serde_json::Value> {
+    access.require_local()?;
+    let binder = state
+        .wechat_binder()
+        .ok_or_else(|| GatewayError::invalid_request("WeChat adapter is not configured"))?;
+    binder.unbind().await.map_err(GatewayError::transport)?;
     Ok(Json(serde_json::json!({ "unbound": true })))
 }
 

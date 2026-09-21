@@ -16,7 +16,7 @@ use gateway_core::manager::{AgentCatalog, SessionManager, SessionManagerConfig};
 use gateway_core::ports::{Clock, MachineRepository, SystemClock};
 use gateway_core::session::SessionOrigin;
 use gateway_relay::{RelayClient, RelayStatus, RelayWorker};
-use gateway_remote::{AppState, ComponentHealth, HealthSource, RemoteServer};
+use gateway_remote::{AppState, ComponentHealth, HealthSource, RemoteServer, SessionBinder};
 use gateway_store::Database;
 use gateway_tunnel::{TunnelLaunch, TunnelSpec, TunnelStatus, TunnelSupervisor};
 use gateway_wechat::{
@@ -80,6 +80,10 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
     let relay = Arc::new(start_relay(&config, &identity, &manager, &machine)?);
     let ahp = Arc::new(start_ahp(&config, &identity, &manager)?);
     let wechat = Arc::new(start_wechat(&config, &identity, &manager, &database).await?);
+    let wechat_binder = Arc::new(WechatChannelBinder {
+        ahp: Arc::clone(&ahp),
+        wechat: Arc::clone(&wechat),
+    });
     let mut adapters = AdapterRuntime::start(&config, Arc::clone(&manager))?;
     let wechat_auto_bind = wechat
         .is_enabled()
@@ -115,7 +119,8 @@ pub(crate) async fn run(config: GatewayConfig) -> Result<()> {
         config.security.trust_loopback,
         health_sources,
     )
-    .with_ahp(Arc::clone(&ahp));
+    .with_ahp(Arc::clone(&ahp))
+    .with_wechat_binder(wechat_binder);
 
     let maintenance = tokio::spawn(maintenance_loop(
         Arc::clone(&auth),
@@ -475,6 +480,31 @@ impl HealthSource for AhpHealth {
 #[derive(Debug)]
 struct WechatHealth(Arc<WechatSupervisor>);
 
+#[derive(Debug)]
+struct WechatChannelBinder {
+    ahp: Arc<AhpSupervisor>,
+    wechat: Arc<WechatSupervisor>,
+}
+
+#[async_trait::async_trait]
+impl SessionBinder for WechatChannelBinder {
+    async fn bind(&self, session_id: gateway_core::SessionId) -> std::result::Result<(), String> {
+        if self.wechat.is_enabled() {
+            self.wechat.rebind(session_id).await
+        } else {
+            self.ahp.bind(session_id).await
+        }
+    }
+
+    async fn unbind(&self) -> std::result::Result<(), String> {
+        if self.wechat.is_enabled() {
+            Err("embedded WeChat follows the newest active IDE session automatically".to_owned())
+        } else {
+            self.ahp.unbind().await
+        }
+    }
+}
+
 impl HealthSource for WechatHealth {
     fn health(&self) -> ComponentHealth {
         ComponentHealth {
@@ -485,7 +515,10 @@ impl HealthSource for WechatHealth {
                 "disabled"
             }
             .to_owned(),
-            detail: None,
+            detail: self
+                .0
+                .binding_session_id()
+                .map(|session_id| format!("session_id={session_id}")),
         }
     }
 }

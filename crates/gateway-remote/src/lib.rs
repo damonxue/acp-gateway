@@ -36,7 +36,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 pub use error::ApiError;
-pub use state::{Access, AppState, ComponentHealth, HealthSource};
+pub use state::{Access, AppState, ComponentHealth, HealthSource, SessionBinder};
 
 /// A bound, not-yet-serving HTTP server.
 ///
