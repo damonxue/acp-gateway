@@ -77,8 +77,11 @@ printf 'APPL????' > "${app}/Contents/PkgInfo"
 # points at the wrapper, while the status item starts the daemon.
 cp target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway-daemon"
 if [ "$build_app" = true ]; then
-  cp app/target/release/agent-gateway-app "${app}/Contents/MacOS/agent-gateway-app"
-  cp app/target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway"
+  # `app` is part of the root workspace, so Cargo writes both binaries to
+  # the root target directory.  The app binary is the menu bar executable;
+  # the CLI binary is the sibling wrapper used by Zed.
+  cp target/release/agent-gateway-app "${app}/Contents/MacOS/agent-gateway-app"
+  cp target/release/agent-gateway-wrapper "${app}/Contents/MacOS/agent-gateway"
 else
   cp target/release/agent-gateway "${app}/Contents/MacOS/agent-gateway"
   # Without the GUI the bundle still has to have its declared executable, so

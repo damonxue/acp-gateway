@@ -6,10 +6,15 @@ edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
 publish = false
+autobins = false
 
 [[bin]]
 name = "agent-gateway-app"
 path = "src/main.rs"
+
+[[bin]]
+name = "agent-gateway-wrapper"
+path = "src/bin/agent-gateway.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Use the maintained Objective-C bindings for the macOS UI.
@@ -38,14 +43,3 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"
-
-# Proc-macros and build scripts are loaded as dynamic libraries while Cargo
-# compiles the app. Keeping their LINKEDIT sections intact avoids Apple's
-# "mis-aligned LINKEDIT string pool" loader failure on recent Xcode versions.
-[profile.release.build-override]
-strip = false

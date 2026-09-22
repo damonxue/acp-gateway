@@ -249,10 +249,10 @@ fn run_inner() -> WindowsResult<()> {
             Some(instance),
             None,
         )?;
-        ShowWindow(window, SW_SHOW);
+        let _ = ShowWindow(window, SW_SHOW);
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
-            TranslateMessage(&message);
+            let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
     }

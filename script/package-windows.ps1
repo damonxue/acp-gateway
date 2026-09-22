@@ -11,7 +11,7 @@ if (Test-Path $archive) { Remove-Item -Force $archive }
 New-Item -ItemType Directory -Force $staging | Out-Null
 
 Copy-Item "target/release/agent-gateway.exe" "$staging/agent-gateway-daemon.exe"
-Copy-Item "app/target/release/agent-gateway-app.exe" "$staging/agent-gateway-app.exe"
+Copy-Item "target/release/agent-gateway-app.exe" "$staging/agent-gateway-app.exe"
 Copy-Item "README.md" "$staging/README.md"
 Copy-Item "README.zh-CN.md" "$staging/README.zh-CN.md"
 
